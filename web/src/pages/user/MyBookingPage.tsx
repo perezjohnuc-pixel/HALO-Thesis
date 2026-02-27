@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   collection,
   doc,
@@ -32,6 +33,7 @@ export default function MyBookingPage() {
   const uid = user?.uid ?? "";
 
   const [booking, setBooking] = useState<Booking | null>(null);
+  const navigate = useNavigate();
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -117,7 +119,7 @@ export default function MyBookingPage() {
         <CardBody>
           <div className="text-sm text-slate-400">Reserve a locker to start.</div>
           <div className="mt-3">
-            <Button as any className="w-full" onClick={() => (window.location.href = "/app/lockers")}>Go to Lockers</Button>
+            <Button className="w-full" onClick={() => navigate("/app/lockers")}>Go to Lockers</Button>
           </div>
         </CardBody>
       </Card>

@@ -5,6 +5,7 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut as fbSignOut,
+  updateProfile,
 } from "firebase/auth";
 import { Timestamp, doc, getDoc, onSnapshot, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
@@ -15,7 +16,7 @@ type AuthCtx = {
   userDoc: UserDoc | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, displayName?: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -43,33 +44,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Ensure user profile doc exists.
-      const ref = doc(db, "users", u.uid);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
-        // Use a concrete timestamp (instead of a serverTimestamp transform)
-        // to avoid rule/type edge-cases during thesis demos.
-        await setDoc(
-          ref,
-          {
-            uid: u.uid,
-            email: u.email ?? null,
-            role: "user",
-            createdAt: Timestamp.now(),
-            lastLoginAt: Timestamp.now(),
-          } satisfies UserDoc as any,
-          { merge: true }
-        );
-      } else {
-        // Update last login timestamp
-        await setDoc(ref, { lastLoginAt: Timestamp.now() } as any, { merge: true });
-      }
+      try {
+        // Ensure user profile doc exists.
+        const ref = doc(db, "users", u.uid);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) {
+          // Use a concrete timestamp (instead of a serverTimestamp transform)
+          // to avoid rule/type edge-cases during thesis demos.
+          await setDoc(
+            ref,
+            {
+              uid: u.uid,
+              email: u.email ?? null,
+              displayName: u.displayName ?? null,
+              role: "user",
+              createdAt: Timestamp.now(),
+              lastLoginAt: Timestamp.now(),
+            } satisfies UserDoc as any,
+            { merge: true }
+          );
+        } else {
+          // Update last login timestamp
+          await setDoc(ref, { lastLoginAt: Timestamp.now() } as any, { merge: true });
+        }
 
-      // Subscribe to user doc for role changes (admin promotion).
-      unsubUserDoc = onSnapshot(ref, (s) => {
-        setUserDoc(s.exists() ? (s.data() as UserDoc) : null);
+        // Subscribe to user doc for role changes (admin promotion).
+        unsubUserDoc = onSnapshot(ref, (s) => {
+          setUserDoc(s.exists() ? (s.data() as UserDoc) : null);
+          setLoading(false);
+        });
+      } catch (e) {
+        console.error("Failed to initialize auth user document", e);
+        setUserDoc(null);
         setLoading(false);
-      });
+      }
     });
 
     return () => {
@@ -86,8 +94,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async signIn(email, password) {
         await signInWithEmailAndPassword(auth, email, password);
       },
-      async register(email, password) {
-        await createUserWithEmailAndPassword(auth, email, password);
+      async register(email, password, displayName) {
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+
+        if (displayName?.trim()) {
+          await updateProfile(cred.user, { displayName: displayName.trim() });
+        }
+
+        await setDoc(
+          doc(db, "users", cred.user.uid),
+          {
+            uid: cred.user.uid,
+            email: cred.user.email ?? email,
+            displayName: displayName?.trim() || null,
+            role: "user",
+            createdAt: Timestamp.now(),
+            lastLoginAt: Timestamp.now(),
+          } satisfies UserDoc as any,
+          { merge: true }
+        );
       },
       async signOut() {
         await fbSignOut(auth);
