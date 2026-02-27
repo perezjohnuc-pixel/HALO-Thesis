@@ -15,6 +15,7 @@ import type { Booking, Locker } from "../../lib/types";
 import { Button, Card, CardBody, CardHeader, Label, Badge } from "../../components/ui";
 import StatusPill from "../../components/StatusPill";
 import { useNavigate } from "react-router-dom";
+import { doc, setDoc } from "firebase/firestore"; // add these imports
 
 // Fixed demo pricing + duration (per your thesis flow)
 const DEFAULT_AMOUNT = 25; // PHP
@@ -56,39 +57,46 @@ export default function LockersPage() {
   }, [lockers]);
 
   async function reserve(lockerId: string) {
-    if (!user) return;
-    if (myBooking) {
-      alert("You already have an active/held booking.");
-      navigate("/app/booking");
-      return;
-    }
-    setBusy(true);
-    try {
-      const now = Date.now();
-      const scanDeadline = Timestamp.fromMillis(now + 3 * 60 * 1000);
-      await addDoc(collection(db, "bookings"), {
-        userId: user.uid,
-        lockerId,
-        status: "reserved",
-        // Fixed (non-editable) duration
-        durationMin: FIXED_DURATION_MIN,
-        amount: DEFAULT_AMOUNT,
-        createdAt: serverTimestamp(),
-        startAt: serverTimestamp(),
-        // Pre-seed QR fields on client so My Booking can immediately display a QR.
-        // Backend will preserve this token and attach qrTokenHash for verification.
-        qrToken: clientQrToken(),
-        qrExpiresAt: scanDeadline,
-        holdExpiresAt: scanDeadline,
-      } as any);
-      navigate("/app/booking");
-    } catch (e: any) {
-      console.error(e);
-      alert(e?.message ?? String(e));
-    } finally {
-      setBusy(false);
-    }
+  if (!user) return;
+  if (myBooking) {
+    alert("You already have an active/held booking.");
+    navigate("/app/booking");
+    return;
   }
+
+  setBusy(true);
+  try {
+    const now = Date.now();
+    const scanDeadline = Timestamp.fromMillis(now + 3 * 60 * 1000);
+
+    // ✅ Create doc ref first so we know bookingId
+    const bookingRef = doc(collection(db, "bookings"));
+    const bookingId = bookingRef.id;
+
+    await setDoc(bookingRef, {
+      userId: user.uid,
+      lockerId,
+      status: "reserved",
+      durationMin: FIXED_DURATION_MIN,
+      amount: DEFAULT_AMOUNT,
+      createdAt: serverTimestamp(),
+      startAt: serverTimestamp(),
+
+      // ✅ Option B: token IS the bookingId
+      qrToken: bookingId,
+
+      qrExpiresAt: scanDeadline,
+      holdExpiresAt: scanDeadline,
+    } as any);
+
+    navigate("/app/booking");
+  } catch (e: any) {
+    console.error(e);
+    alert(e?.message ?? String(e));
+  } finally {
+    setBusy(false);
+  }
+}
 
   return (
     <div className="space-y-6">

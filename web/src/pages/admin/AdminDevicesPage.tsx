@@ -71,7 +71,7 @@ export default function AdminDevicesPage() {
   }
 
   function fillFromBooking(b: Booking & { id: string }) {
-    const token = b.qrToken || sparkTokenFor(b.id);
+    const token = b.id;
     setVerify((curr) => ({ ...curr, bookingId: b.id, lockerId: b.lockerId, token }));
     // For online payment simulation, we reuse the token as the "raw QR payload".
     // For cash, you can change provider to "cash" and keep payload as-is.
