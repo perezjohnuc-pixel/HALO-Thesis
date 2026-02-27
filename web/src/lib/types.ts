@@ -18,6 +18,7 @@ export type FireTimestamp = any; // Firestore Timestamp or serverTimestamp() res
 export type UserDoc = {
   uid: string;
   email?: string | null;
+  displayName?: string | null;
   role: UserRole;
   createdAt?: FireTimestamp;
   lastLoginAt?: FireTimestamp;

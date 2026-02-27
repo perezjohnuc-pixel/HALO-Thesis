@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   collection,
   doc,
@@ -32,8 +33,10 @@ export default function MyBookingPage() {
   const uid = user?.uid ?? "";
 
   const [booking, setBooking] = useState<Booking | null>(null);
+  const navigate = useNavigate();
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     if (!uid) return;
@@ -107,6 +110,18 @@ export default function MyBookingPage() {
     }
   }
 
+  async function copyQrPayload() {
+    if (!displayQrPayload) return;
+    try {
+      await navigator.clipboard.writeText(displayQrPayload);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    } finally {
+      setTimeout(() => setCopyState("idle"), 1500);
+    }
+  }
+
   if (!booking) {
     return (
       <Card>
@@ -117,7 +132,7 @@ export default function MyBookingPage() {
         <CardBody>
           <div className="text-sm text-slate-400">Reserve a locker to start.</div>
           <div className="mt-3">
-            <Button as any className="w-full" onClick={() => (window.location.href = "/app/lockers")}>Go to Lockers</Button>
+            <Button className="w-full" onClick={() => navigate("/app/lockers")}>Go to Lockers</Button>
           </div>
         </CardBody>
       </Card>
@@ -198,6 +213,11 @@ export default function MyBookingPage() {
                   )}
                 </div>
                 <div className="mt-2 text-xs text-slate-500 break-all">{displayQrPayload}</div>
+                <div className="mt-3">
+                  <Button variant="secondary" size="sm" onClick={copyQrPayload}>
+                    {copyState === "copied" ? "QR payload copied" : copyState === "failed" ? "Copy failed" : "Copy QR payload"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
