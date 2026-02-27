@@ -75,6 +75,18 @@ function requireDeviceKey(req: any): { ok: true } | { ok: false; status: number;
   return { ok: true };
 }
 
+async function requireUserAuth(req: any): Promise<{ ok: true; uid: string } | { ok: false; status: number; error: string }> {
+  const authHeader = (req.get("authorization") || "").toString();
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  if (!token) return { ok: false, status: 401, error: "MISSING_AUTH_TOKEN" };
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    return { ok: true, uid: decoded.uid };
+  } catch {
+    return { ok: false, status: 401, error: "INVALID_AUTH_TOKEN" };
+  }
+}
+
 const withCors = cors({ origin: true });
 
 // =====================================================
@@ -726,6 +738,89 @@ export const completeBookingAndReleaseLocker = onRequest(async (req, res) => {
 
       if (!result.ok) return res.status(400).json(result);
       return res.json({ ok: true, bookingId: (result as any).bookingId });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
+    }
+  });
+});
+
+/**
+ * User-initiated finish endpoint (mobile/web app):
+ * - User picks sanitation mode(s) and taps Unlock from their app.
+ * - Endpoint validates booking ownership and active state.
+ * - Marks booking completed and releases locker for next user.
+ */
+export const userCompleteBooking = onRequest(async (req, res) => {
+  return withCors(req, res, async () => {
+    if (req.method === "OPTIONS") return res.status(204).send("");
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "METHOD_NOT_ALLOWED" });
+
+    const auth = await requireUserAuth(req);
+    if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+    const { bookingId, selectedModes, sequenceName } = (req.body ?? {}) as {
+      bookingId?: string;
+      selectedModes?: string[];
+      sequenceName?: string;
+    };
+
+    if (!bookingId) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+    const bookingRef = db.doc(`bookings/${bookingId}`);
+
+    try {
+      const result = await db.runTransaction(async (tx) => {
+        const bSnap = await tx.get(bookingRef);
+        if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+
+        const booking = bSnap.data() as any;
+        if (booking.userId !== auth.uid) return { ok: false as const, error: "FORBIDDEN" };
+        if (booking.status !== "active") return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+
+        const lockerId = booking.lockerId as string | undefined;
+        if (!lockerId) return { ok: false as const, error: "INVALID_BOOKING" };
+
+        const lockerRef = db.doc(`lockers/${lockerId}`);
+        const lSnap = await tx.get(lockerRef);
+        if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
+
+        tx.update(bookingRef, {
+          status: "completed",
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedByUserId: auth.uid,
+          selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
+          sequenceName: sequenceName ?? "custom",
+        });
+
+        tx.update(lockerRef, {
+          status: "available",
+          occupied: false,
+          currentBookingId: null,
+          reservedByUserId: null,
+          pendingPayment: false,
+          reservationExpiresAt: null,
+          pendingPaymentExpiresAt: null,
+          lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(db.collection("logs").doc(), {
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          type: "USER_UNLOCKED_LOCKER",
+          message: "User completed sanitation flow and unlocked the locker from the app.",
+          lockerId,
+          userId: auth.uid,
+          payload: {
+            bookingId,
+            selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
+            sequenceName: sequenceName ?? "custom",
+          },
+        });
+
+        return { ok: true as const, lockerId };
+      });
+
+      if (!result.ok) return res.status(400).json(result);
+      return res.json({ ok: true, action: "UNLOCKED", lockerId: (result as any).lockerId });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
     }
