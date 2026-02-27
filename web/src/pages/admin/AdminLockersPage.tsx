@@ -1,14 +1,59 @@
 import React, { useEffect, useState } from "react";
-import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { Button, Card, CardBody, CardHeader, Input, Label } from "../../components/ui";
 import StatusPill from "../../components/StatusPill";
 import { fmtTs } from "../../lib/format";
-import type { Locker, LockerStatus } from "../../lib/types";
+import type { Locker, LockerStatus, LogEvent } from "../../lib/types";
 
 type Row = { id: string; data: Locker };
 
 const col = collection(db, "lockers");
+
+function withId<T>(docSnap: any): T & { id: string } {
+  return { id: docSnap.id, ...(docSnap.data?.() ?? {}) };
+}
+
+function LockerTimeline({ lockerId }: { lockerId: string }) {
+  const [logs, setLogs] = useState<Array<LogEvent & { id: string }>>([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "logs"),
+      where("lockerId", "==", lockerId),
+      orderBy("createdAt", "desc"),
+      limit(6)
+    );
+    return onSnapshot(q, (snap) => setLogs(snap.docs.map((d) => withId<LogEvent>(d))));
+  }, [lockerId]);
+
+  if (logs.length === 0) return <div className="text-xs text-slate-500">No logs for this locker yet.</div>;
+
+  return (
+    <div className="mt-2 divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/30">
+      {logs.map((l) => (
+        <div key={l.id} className="p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-200">{l.type}</div>
+            <div className="text-[11px] text-slate-500">{fmtTs(l.createdAt) || "—"}</div>
+          </div>
+          <div className="mt-1 text-xs text-slate-300">{l.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function AdminLockersPage() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -50,6 +95,18 @@ export default function AdminLockersPage() {
         reservationExpiresAt: null,
         pendingPaymentExpiresAt: null,
       });
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateBookingForLocker(lockerId: string, bookingId: string, patch: Record<string, any>) {
+    setErr(null);
+    setBusy(lockerId);
+    try {
+      await updateDoc(doc(db, "bookings", bookingId), patch as any);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -144,6 +201,59 @@ export default function AdminLockersPage() {
                 </div>
               </div>
 
+              {r.data.currentBookingId ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+                  <div className="text-sm font-semibold text-slate-200">Current booking actions</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy === r.id}
+                      onClick={() =>
+                        updateBookingForLocker(r.id, r.data.currentBookingId as string, {
+                          status: "completed",
+                          completedAt: serverTimestamp(),
+                          endAt: serverTimestamp(),
+                        })
+                      }
+                    >
+                      Mark completed
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy === r.id}
+                      onClick={() =>
+                        updateBookingForLocker(r.id, r.data.currentBookingId as string, {
+                          status: "expired",
+                          expiredAt: serverTimestamp(),
+                          endAt: serverTimestamp(),
+                        })
+                      }
+                    >
+                      Expire booking
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={busy === r.id}
+                      onClick={() =>
+                        updateBookingForLocker(r.id, r.data.currentBookingId as string, {
+                          status: "cancelled",
+                          cancelledAt: serverTimestamp(),
+                          endAt: serverTimestamp(),
+                        })
+                      }
+                    >
+                      Cancel booking
+                    </Button>
+                    <div className="text-xs text-slate-500 self-center">
+                      These will trigger automatic locker release.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="secondary"
@@ -176,6 +286,11 @@ export default function AdminLockersPage() {
                 <div className="text-xs text-slate-400 self-center">
                   Use <span className="text-slate-200">Admin → Devices</span> to simulate scans.
                 </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-slate-200">Recent logs</div>
+                <LockerTimeline lockerId={r.id} />
               </div>
             </CardBody>
           </Card>

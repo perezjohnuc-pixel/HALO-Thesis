@@ -78,6 +78,10 @@ export function expireNow() {
   return postJson<any>("/api/expireNow", {});
 }
 
+export function userStartProgram(input: { bookingId: string; selectedModes: string[]; sequenceName: string }) {
+  return postJsonAsUser<any>("/api/user/startProgram", input);
+}
+
 export function userCompleteBooking(input: { bookingId: string; selectedModes: string[]; sequenceName: string }) {
   return postJsonAsUser<any>("/api/user/complete", input);
 }
@@ -89,6 +93,7 @@ const api = {
   deviceConfirmPayment,
   deviceComplete,
   expireNow,
+  userStartProgram,
   userCompleteBooking,
 };
 

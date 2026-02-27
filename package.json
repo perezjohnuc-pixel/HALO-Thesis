@@ -6,7 +6,8 @@
     "dev:web": "npm --prefix web run dev",
     "build:web": "npm --prefix web run build",
     "build:functions": "npm --prefix functions run build",
-    "emulators": "npm --prefix functions run build && firebase emulators:start",
+    "emulators": "npm --prefix functions run build && npm --prefix web run build && firebase emulators:start",
+    "demo": "npm run emulators",
     "deploy:hosting": "npm --prefix web run build && firebase deploy --only hosting",
     "deploy:rules": "firebase deploy --only firestore:rules",
     "typecheck:web": "npm --prefix web run typecheck"

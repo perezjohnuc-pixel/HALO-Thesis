@@ -30,7 +30,30 @@ const PAYMENT_TTL_MS = 2 * 60 * 1000;
 const UNLOCK_MS = 5000;
 
 // Default UV-C run time (seconds). Adjust to your design.
-const DEFAULT_UV_SEC = 120;
+const DEFAULT_UV_SEC = (() => {
+  const v = Number(process.env.DEFAULT_UV_SECONDS || 120);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 120;
+})();
+
+// Sanitation program defaults (seconds). These should mirror the web UI recommended times.
+const DEFAULT_MIST_SEC = (() => {
+  const v = Number(process.env.MIST_SECONDS || 120);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 120;
+})();
+
+const DEFAULT_DRYER_SEC = (() => {
+  const v = Number(process.env.DRYER_SECONDS || 180);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 180;
+})();
+
+const PROGRAM_ORDER = ["mist", "dryer", "uvc"] as const;
+
+function stepSeconds(step: string): number {
+  if (step === "mist") return DEFAULT_MIST_SEC;
+  if (step === "dryer") return DEFAULT_DRYER_SEC;
+  if (step === "uvc") return DEFAULT_UV_SEC;
+  return 0;
+}
 
 type BookingStatus =
   | "reserved"
@@ -243,6 +266,32 @@ export const onBookingUpdate = onDocumentUpdated("bookings/{bookingId}", async (
       });
     });
   }
+});
+
+// =======================================
+// 3a) Log booking status transitions (helps admin timeline)
+// =======================================
+export const logBookingStatusTransitions = onDocumentUpdated("bookings/{bookingId}", async (event) => {
+  const bookingId = event.params.bookingId as string;
+  const before = event.data?.before.data() as any;
+  const after = event.data?.after.data() as any;
+
+  const beforeStatus = before?.status as BookingStatus | undefined;
+  const afterStatus = after?.status as BookingStatus | undefined;
+  if (!beforeStatus || !afterStatus) return;
+  if (beforeStatus === afterStatus) return;
+
+  const lockerId = after?.lockerId ?? before?.lockerId ?? null;
+  const userId = after?.userId ?? before?.userId ?? null;
+
+  await db.collection("logs").doc().set({
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    type: "BOOKING_STATUS_CHANGED",
+    message: `Booking status changed from ${beforeStatus} to ${afterStatus}.`,
+    lockerId,
+    userId,
+    payload: { bookingId, from: beforeStatus, to: afterStatus },
+  });
 });
 
 // =======================================
@@ -501,8 +550,6 @@ export const verifyQrAndUnlock = onRequest(async (req, res) => {
 
         tx.update(bookingRef, {
           status: "pending_payment",
-          unlockedAt: admin.firestore.FieldValue.serverTimestamp(),
-          unlockedByDeviceId: deviceId ?? null,
           paymentRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
           holdExpiresAt: payDeadline,
           qrUsedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -536,9 +583,7 @@ export const verifyQrAndUnlock = onRequest(async (req, res) => {
 
       return res.json({
         ok: true,
-        action: "UNLOCK",
-        unlockMs: UNLOCK_MS,
-        next: "PAYMENT_REQUIRED",
+        action: "PAYMENT_REQUIRED",
         paymentWindowSec: (result as any).paymentWindowSec ?? Math.ceil(PAYMENT_TTL_MS / 1000),
       });
     } catch (err: any) {
@@ -548,11 +593,11 @@ export const verifyQrAndUnlock = onRequest(async (req, res) => {
 });
 
 /**
- * Payment scan endpoint (device -> backend)
- * Second scan:
- *  - Device scans GCash/Maya QR (raw payload), then calls this endpoint.
+ * Payment confirmation endpoint (device -> backend)
+ * After payment:
  *  - Backend marks booking ACTIVE and sets endAt based on durationMin.
- *  - Backend returns START_DISINFECTION command.
+ *  - Backend queues an UNLOCK command.
+ *  - Sanitation program is started by the user (authenticated) via /api/user/startProgram.
  */
 export const confirmPaymentAndStartDisinfection = onRequest(async (req, res) => {
   return withCors(req, res, async () => {
@@ -644,26 +689,26 @@ export const confirmPaymentAndStartDisinfection = onRequest(async (req, res) => 
         tx.set(db.collection("logs").doc(), {
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           type: "PAYMENT_CONFIRMED",
-          message: "Payment confirmed. Disinfection can proceed.",
+          message: "Payment confirmed. Locker will unlock; user may start sanitation program.",
           lockerId,
           userId: booking.userId ?? null,
           payload: { bookingId, paymentId: payRef.id, provider: provider ?? "unknown" },
         });
 
-        // Optional: device command document (for polling architectures)
+        // Device command: unlock the locker after payment.
         tx.set(db.collection("deviceCommands").doc(), {
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           lockerId,
-          type: "start_disinfection",
+          type: "unlock",
           status: "queued",
-          payload: { uvSeconds: DEFAULT_UV_SEC, bookingId },
+          payload: { durationMs: UNLOCK_MS, reason: "payment_confirmed", bookingId },
         });
 
-        return { ok: true as const, bookingId, uvSeconds: DEFAULT_UV_SEC, endsAt: endAt.toMillis() };
+        return { ok: true as const, bookingId, unlockMs: UNLOCK_MS, endsAt: endAt.toMillis() };
       });
 
       if (!result.ok) return res.status(400).json(result);
-      return res.json({ ok: true, action: "START_DISINFECTION", bookingId: (result as any).bookingId, uvSeconds: (result as any).uvSeconds, endsAt: (result as any).endsAt });
+      return res.json({ ok: true, action: "UNLOCK", bookingId: (result as any).bookingId, unlockMs: (result as any).unlockMs, endsAt: (result as any).endsAt });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
     }
@@ -746,6 +791,99 @@ export const completeBookingAndReleaseLocker = onRequest(async (req, res) => {
 });
 
 /**
+ * User starts sanitation program (mobile/web app):
+ * - Validates booking ownership and ACTIVE state
+ * - Writes a deviceCommands doc with ordered program steps (Mist → Dryer → UV‑C)
+ * - Persists selectedModes/sequenceName onto the booking for audit/logging
+ */
+export const userStartProgram = onRequest(async (req, res) => {
+  return withCors(req, res, async () => {
+    if (req.method === "OPTIONS") return res.status(204).send("");
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "METHOD_NOT_ALLOWED" });
+
+    const auth = await requireUserAuth(req);
+    if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+    const { bookingId, selectedModes, sequenceName } = (req.body ?? {}) as {
+      bookingId?: string;
+      selectedModes?: string[];
+      sequenceName?: string;
+    };
+
+    if (!bookingId) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+    const chosen = Array.isArray(selectedModes) ? selectedModes.map((s) => String(s)) : [];
+    const allowed = new Set(PROGRAM_ORDER);
+    const unique = Array.from(new Set(chosen.filter((m) => allowed.has(m as any))));
+    const ordered = PROGRAM_ORDER.filter((m) => unique.includes(m));
+    if (ordered.length === 0) return res.status(400).json({ ok: false, error: "NO_VALID_MODES" });
+
+    const bookingRef = db.doc(`bookings/${bookingId}`);
+
+    try {
+      const result = await db.runTransaction(async (tx) => {
+        const bSnap = await tx.get(bookingRef);
+        if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+
+        const booking = bSnap.data() as any;
+        if (booking.userId !== auth.uid) return { ok: false as const, error: "FORBIDDEN" };
+        if (booking.status !== "active") return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+
+        const lockerId = booking.lockerId as string | undefined;
+        if (!lockerId) return { ok: false as const, error: "INVALID_BOOKING" };
+
+        // Idempotent: one program doc per booking.
+        const cmdRef = db.collection("deviceCommands").doc(`program_${bookingId}`);
+
+        const steps = ordered.map((id, idx) => ({
+          id,
+          order: idx,
+          seconds: stepSeconds(id),
+        }));
+
+        tx.set(
+          cmdRef,
+          {
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            lockerId,
+            type: "sanitation_program",
+            status: "queued",
+            payload: {
+              bookingId,
+              sequenceName: sequenceName ?? "custom",
+              steps,
+            },
+          },
+          { merge: true }
+        );
+
+        tx.update(bookingRef, {
+          selectedModes: ordered,
+          sequenceName: sequenceName ?? "custom",
+          sanitationRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(db.collection("logs").doc(), {
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          type: "SANITATION_PROGRAM_REQUESTED",
+          message: `Sanitation program requested (${ordered.join(" → ")}).`,
+          lockerId,
+          userId: auth.uid,
+          payload: { bookingId, selectedModes: ordered, sequenceName: sequenceName ?? "custom" },
+        });
+
+        return { ok: true as const, lockerId, steps };
+      });
+
+      if (!result.ok) return res.status(400).json(result);
+      return res.json({ ok: true, lockerId: (result as any).lockerId, steps: (result as any).steps });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
+    }
+  });
+});
+
+/**
  * User-initiated finish endpoint (mobile/web app):
  * - User picks sanitation mode(s) and taps Unlock from their app.
  * - Endpoint validates booking ownership and active state.
@@ -792,6 +930,19 @@ export const userCompleteBooking = onRequest(async (req, res) => {
           selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
           sequenceName: sequenceName ?? "custom",
         });
+
+        // Device command: unlock so the user can retrieve items.
+        tx.set(
+          db.collection("deviceCommands").doc(`unlock_user_${bookingId}`),
+          {
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            lockerId,
+            type: "unlock",
+            status: "queued",
+            payload: { durationMs: UNLOCK_MS, reason: "user_complete", bookingId },
+          },
+          { merge: true }
+        );
 
         tx.update(lockerRef, {
           status: "available",
