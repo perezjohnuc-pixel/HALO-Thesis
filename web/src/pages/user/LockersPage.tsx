@@ -5,6 +5,7 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  Timestamp,
   where,
   limit
 } from "firebase/firestore";
@@ -18,6 +19,9 @@ import { useNavigate } from "react-router-dom";
 // Fixed demo pricing + duration (per your thesis flow)
 const DEFAULT_AMOUNT = 25; // PHP
 const FIXED_DURATION_MIN = 3; // minutes (used after payment)
+function clientQrToken() {
+  return `spark-${Math.random().toString(36).slice(2, 12)}`;
+}
 
 export default function LockersPage() {
   const { user } = useAuth();
@@ -60,6 +64,8 @@ export default function LockersPage() {
     }
     setBusy(true);
     try {
+      const now = Date.now();
+      const scanDeadline = Timestamp.fromMillis(now + 3 * 60 * 1000);
       await addDoc(collection(db, "bookings"), {
         userId: user.uid,
         lockerId,
@@ -68,7 +74,12 @@ export default function LockersPage() {
         durationMin: FIXED_DURATION_MIN,
         amount: DEFAULT_AMOUNT,
         createdAt: serverTimestamp(),
-        startAt: serverTimestamp()
+        startAt: serverTimestamp(),
+        // Pre-seed QR fields on client so My Booking can immediately display a QR.
+        // Backend will preserve this token and attach qrTokenHash for verification.
+        qrToken: clientQrToken(),
+        qrExpiresAt: scanDeadline,
+        holdExpiresAt: scanDeadline,
       } as any);
       navigate("/app/booking");
     } catch (e: any) {

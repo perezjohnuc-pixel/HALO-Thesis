@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Badge, Button, Card, CardBody, CardHeader, Input, Label } from "../../components/ui";
 import {
   deviceComplete,
@@ -8,6 +8,9 @@ import {
   getDeviceKey,
   setDeviceKey,
 } from "../../lib/api";
+import { collection, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import type { Booking } from "../../lib/types";
 
 function pretty(v: unknown) {
   try {
@@ -17,6 +20,14 @@ function pretty(v: unknown) {
   }
 }
 
+function withId<T>(doc: any): T & { id: string } {
+  return { id: doc.id, ...(doc.data?.() ?? {}) };
+}
+
+function sparkTokenFor(id: string) {
+  return `spark-${id.slice(0, 8)}`;
+}
+
 export default function AdminDevicesPage() {
   const [deviceKey, setKey] = useState(getDeviceKey());
 
@@ -24,11 +35,26 @@ export default function AdminDevicesPage() {
   const [pay, setPay] = useState({ lockerId: "", provider: "gcash" as "gcash" | "maya" | "unknown", paymentPayload: "" });
   const [complete, setComplete] = useState({ lockerId: "", success: true, deviceId: "SIM-DEVICE-01" });
 
+  const [bookings, setBookings] = useState<Array<Booking & { id: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   const ok = useMemo(() => (last && last.ok ? true : false), [last]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "bookings"),
+      where("status", "in", ["reserved", "pending_payment", "active"]),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    return onSnapshot(q, (snap) => setBookings(snap.docs.map((d) => withId<Booking>(d))));
+  }, []);
+
+  const latestReserved = useMemo(() => bookings.find((b) => b.status === "reserved") ?? null, [bookings]);
+  const latestPendingPayment = useMemo(() => bookings.find((b) => b.status === "pending_payment") ?? null, [bookings]);
+  const latestActive = useMemo(() => bookings.find((b) => b.status === "active") ?? null, [bookings]);
 
   async function run<T>(fn: () => Promise<T>) {
     setError(null);
@@ -44,17 +70,24 @@ export default function AdminDevicesPage() {
     }
   }
 
+  function fillFromBooking(b: Booking & { id: string }) {
+    const token = b.qrToken || sparkTokenFor(b.id);
+    setVerify((curr) => ({ ...curr, bookingId: b.id, lockerId: b.lockerId, token }));
+    setPay((curr) => ({ ...curr, lockerId: b.lockerId, paymentPayload: token }));
+    setComplete((curr) => ({ ...curr, lockerId: b.lockerId }));
+  }
+
   return (
     <div className="grid gap-4">
       <Card>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <div className="text-lg font-semibold">Device Simulator</div>
+            <div className="text-lg font-semibold">Admin Operations Console</div>
             <div className="text-sm text-slate-400">
-              For Option B (simulation-only). This page calls your HTTPS Functions endpoints.
+              Simple flow for admin: load booking, verify QR, confirm payment, then complete and release locker.
             </div>
           </div>
-          <Badge color="blue">/api/*</Badge>
+          <Badge color="blue">Simple mode</Badge>
         </CardHeader>
         <CardBody className="grid gap-4">
           <div>
@@ -75,16 +108,47 @@ export default function AdminDevicesPage() {
                 Save
               </Button>
             </div>
-            <div className="mt-2 text-xs text-slate-400">
-              The backend expects header <span className="text-slate-200">x-halo-device-key</span>. Your web app sends it automatically.
-            </div>
           </div>
+
+          <Card>
+            <CardHeader>
+              <div className="font-semibold">Quick fill from latest bookings</div>
+              <div className="text-xs text-slate-400">Use these buttons to avoid manual copy/paste.</div>
+            </CardHeader>
+            <CardBody className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!latestReserved}
+                onClick={() => latestReserved && fillFromBooking(latestReserved)}
+              >
+                Load latest RESERVED
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!latestPendingPayment}
+                onClick={() => latestPendingPayment && fillFromBooking(latestPendingPayment)}
+              >
+                Load latest PENDING_PAYMENT
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!latestActive}
+                onClick={() => latestActive && fillFromBooking(latestActive)}
+              >
+                Load latest ACTIVE
+              </Button>
+              <div className="text-xs text-slate-400 self-center">Active tracked bookings: {bookings.length}</div>
+            </CardBody>
+          </Card>
 
           <div className="grid gap-4 md:grid-cols-3">
             <Card className="md:col-span-1">
               <CardHeader>
-                <div className="font-semibold">1) QR scan → Unlock</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/verify</div>
+                <div className="font-semibold">1) Verify booking QR</div>
+                <div className="text-xs text-slate-400">POST /api/verify</div>
               </CardHeader>
               <CardBody className="space-y-2">
                 <div>
@@ -106,24 +170,25 @@ export default function AdminDevicesPage() {
                 <Button
                   disabled={busy}
                   onClick={() =>
-                    run(() => deviceVerifyQr({
-                      bookingId: verify.bookingId,
-                      lockerId: verify.lockerId,
-                      token: verify.token,
-                      deviceId: verify.deviceId,
-                    }))
+                    run(() =>
+                      deviceVerifyQr({
+                        bookingId: verify.bookingId,
+                        lockerId: verify.lockerId,
+                        token: verify.token,
+                        deviceId: verify.deviceId,
+                      })
+                    )
                   }
                 >
                   Verify & Unlock
                 </Button>
-                <div className="text-xs text-slate-400">Expected: status becomes pending_payment (2-minute window).</div>
               </CardBody>
             </Card>
 
             <Card className="md:col-span-1">
               <CardHeader>
-                <div className="font-semibold">2) Payment scan → Start UV</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/confirmPayment</div>
+                <div className="font-semibold">2) Confirm payment</div>
+                <div className="text-xs text-slate-400">POST /api/confirmPayment</div>
               </CardHeader>
               <CardBody className="space-y-2">
                 <div>
@@ -143,7 +208,7 @@ export default function AdminDevicesPage() {
                   <Input
                     value={pay.paymentPayload}
                     onChange={(e) => setPay({ ...pay, paymentPayload: e.target.value })}
-                    placeholder="(Simulated) raw QR payload scanned by device"
+                    placeholder="raw QR payload"
                   />
                 </div>
                 <Button
@@ -159,16 +224,15 @@ export default function AdminDevicesPage() {
                     )
                   }
                 >
-                  Confirm Payment
+                  Confirm payment
                 </Button>
-                <div className="text-xs text-slate-400">Expected: booking becomes active; device command queued for disinfection.</div>
               </CardBody>
             </Card>
 
             <Card className="md:col-span-1">
               <CardHeader>
-                <div className="font-semibold">3) Complete → Release locker</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/complete</div>
+                <div className="font-semibold">3) Complete & release</div>
+                <div className="text-xs text-slate-400">POST /api/complete</div>
               </CardHeader>
               <CardBody className="space-y-2">
                 <div>
@@ -184,11 +248,11 @@ export default function AdminDevicesPage() {
                     id="ok"
                     name="ok"
                     type="checkbox"
-                    aria-label="Disinfection success"
+                    aria-label="Process success"
                     checked={complete.success}
                     onChange={(e) => setComplete({ ...complete, success: e.target.checked })}
                   />
-                  <Label htmlFor="ok">Disinfection success</Label>
+                  <Label htmlFor="ok">Process success</Label>
                 </div>
                 <Button
                   disabled={busy}
@@ -202,9 +266,8 @@ export default function AdminDevicesPage() {
                     )
                   }
                 >
-                  Complete
+                  Complete booking
                 </Button>
-                <div className="text-xs text-slate-400">Expected: booking becomes completed; locker becomes available.</div>
               </CardBody>
             </Card>
           </div>
@@ -223,30 +286,13 @@ export default function AdminDevicesPage() {
 
       <Card>
         <CardHeader>
-          <div className="font-semibold">How to use this for your thesis demo</div>
-          <div className="text-sm text-slate-400">No physical scanner required (Option B)</div>
-        </CardHeader>
-        <CardBody className="text-sm text-slate-300 space-y-2">
-          <div>1) Customer reserves a locker on <span className="text-slate-100">/app/lockers</span>.</div>
-          <div>2) Customer opens <span className="text-slate-100">/app/booking</span> and shows the QR.</div>
-          <div>3) Admin goes here and inputs bookingId + lockerId + token, then clicks <span className="text-slate-100">Verify & Unlock</span>.</div>
-          <div>4) Admin inputs a simulated payment payload and clicks <span className="text-slate-100">Confirm Payment</span> (UV-C can proceed).</div>
-          <div>5) Admin clicks <span className="text-slate-100">Complete</span> to release the locker.</div>
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="font-semibold">Maintenance (Emulator / Spark demos)</div>
-          <div className="text-sm text-slate-400">Manual triggers to keep the demo smooth</div>
+          <div className="font-semibold">Maintenance (Spark / Emulator demos)</div>
+          <div className="text-sm text-slate-400">Manual trigger to expire overdue bookings and release lockers</div>
         </CardHeader>
         <CardBody className="flex flex-wrap gap-2">
           <Button variant="secondary" disabled={busy} onClick={() => run(() => expireNow())}>
             Run expiry now
           </Button>
-          <div className="text-xs text-slate-400 self-center">
-            Expires overdue bookings and releases lockers (same logic as the scheduled job).
-          </div>
         </CardBody>
       </Card>
     </div>
