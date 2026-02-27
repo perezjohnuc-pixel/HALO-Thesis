@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardBody, CardHeader, Input, Label } from "../../components/ui";
 import {
   deviceComplete,
@@ -8,245 +8,232 @@ import {
   getDeviceKey,
   setDeviceKey,
 } from "../../lib/api";
+import { collection, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import type { Booking } from "../../lib/types";
 
-function pretty(v: unknown) {
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
-  }
+function withId<T>(doc: any): T & { id: string } {
+  return { id: doc.id, ...(doc.data?.() ?? {}) };
+}
+
+function sparkTokenFor(id: string) {
+  return `spark-${id.slice(0, 8)}`;
 }
 
 export default function AdminDevicesPage() {
   const [deviceKey, setKey] = useState(getDeviceKey());
-
-  const [verify, setVerify] = useState({ bookingId: "", lockerId: "", token: "", deviceId: "SIM-DEVICE-01" });
-  const [pay, setPay] = useState({ lockerId: "", provider: "gcash" as "gcash" | "maya" | "unknown", paymentPayload: "" });
-  const [complete, setComplete] = useState({ lockerId: "", success: true, deviceId: "SIM-DEVICE-01" });
-
-  const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState<any>(null);
+  const [bookings, setBookings] = useState<Array<Booking & { id: string }>>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  const ok = useMemo(() => (last && last.ok ? true : false), [last]);
+  useEffect(() => {
+    const q = query(
+      collection(db, "bookings"),
+      where("status", "in", ["reserved", "pending_payment", "active"]),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    );
+    return onSnapshot(q, (snap) => setBookings(snap.docs.map((d) => withId<Booking>(d))));
+  }, []);
 
-  async function run<T>(fn: () => Promise<T>) {
+  const grouped = useMemo(() => {
+    return {
+      reserved: bookings.filter((b) => b.status === "reserved"),
+      pendingPayment: bookings.filter((b) => b.status === "pending_payment"),
+      active: bookings.filter((b) => b.status === "active"),
+    };
+  }, [bookings]);
+
+  async function run(bookingId: string, action: () => Promise<any>, success: string) {
     setError(null);
-    setBusy(true);
+    setMsg(null);
+    setBusyId(bookingId);
     try {
-      const res = await fn();
-      setLast(res);
+      await action();
+      setMsg(success);
     } catch (e: any) {
-      setLast(null);
       setError(e?.message ?? String(e));
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
+  function bookingToken(b: Booking & { id: string }) {
+    return b.qrToken || sparkTokenFor(b.id);
+  }
+
   return (
-    <div className="grid gap-4">
+    <div className="space-y-4">
       <Card>
-        <CardHeader className="flex items-center justify-between">
+        <CardHeader className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold">Device Simulator</div>
-            <div className="text-sm text-slate-400">
-              For Option B (simulation-only). This page calls your HTTPS Functions endpoints.
-            </div>
+            <div className="text-lg font-semibold">Admin Operations</div>
+            <div className="text-sm text-slate-400">No simulator guessing — just click the next step for each booking.</div>
           </div>
-          <Badge color="blue">/api/*</Badge>
+          <Badge color="blue">Simple flow</Badge>
         </CardHeader>
-        <CardBody className="grid gap-4">
+        <CardBody className="space-y-3">
           <div>
             <Label>Device API Key</Label>
             <div className="flex gap-2">
               <Input
                 value={deviceKey}
                 onChange={(e) => setKey(e.target.value)}
-                placeholder="Set the same value in functions/.env (HALO_DEVICE_KEY)"
+                placeholder="Set this to the same value in functions/.env"
               />
               <Button
                 variant="secondary"
                 onClick={() => {
                   setDeviceKey(deviceKey);
-                  setLast({ ok: true, message: "Saved to localStorage." });
+                  setMsg("Device key saved.");
                 }}
               >
                 Save
               </Button>
             </div>
-            <div className="mt-2 text-xs text-slate-400">
-              The backend expects header <span className="text-slate-200">x-halo-device-key</span>. Your web app sends it automatically.
-            </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <Card className="md:col-span-1">
-              <CardHeader>
-                <div className="font-semibold">1) QR scan → Unlock</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/verify</div>
-              </CardHeader>
-              <CardBody className="space-y-2">
-                <div>
-                  <Label>Booking ID</Label>
-                  <Input value={verify.bookingId} onChange={(e) => setVerify({ ...verify, bookingId: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Locker ID</Label>
-                  <Input value={verify.lockerId} onChange={(e) => setVerify({ ...verify, lockerId: e.target.value })} />
-                </div>
-                <div>
-                  <Label>QR Token</Label>
-                  <Input value={verify.token} onChange={(e) => setVerify({ ...verify, token: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Device ID</Label>
-                  <Input value={verify.deviceId} onChange={(e) => setVerify({ ...verify, deviceId: e.target.value })} />
-                </div>
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    run(() => deviceVerifyQr({
-                      bookingId: verify.bookingId,
-                      lockerId: verify.lockerId,
-                      token: verify.token,
-                      deviceId: verify.deviceId,
-                    }))
-                  }
-                >
-                  Verify & Unlock
-                </Button>
-                <div className="text-xs text-slate-400">Expected: status becomes pending_payment (2-minute window).</div>
-              </CardBody>
-            </Card>
-
-            <Card className="md:col-span-1">
-              <CardHeader>
-                <div className="font-semibold">2) Payment scan → Start UV</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/confirmPayment</div>
-              </CardHeader>
-              <CardBody className="space-y-2">
-                <div>
-                  <Label>Locker ID</Label>
-                  <Input value={pay.lockerId} onChange={(e) => setPay({ ...pay, lockerId: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Provider</Label>
-                  <Input
-                    value={pay.provider}
-                    onChange={(e) => setPay({ ...pay, provider: (e.target.value as any) ?? "unknown" })}
-                    placeholder="gcash | maya | unknown"
-                  />
-                </div>
-                <div>
-                  <Label>Payment Payload</Label>
-                  <Input
-                    value={pay.paymentPayload}
-                    onChange={(e) => setPay({ ...pay, paymentPayload: e.target.value })}
-                    placeholder="(Simulated) raw QR payload scanned by device"
-                  />
-                </div>
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    run(() =>
-                      deviceConfirmPayment({
-                        lockerId: pay.lockerId,
-                        provider: pay.provider,
-                        paymentPayload: pay.paymentPayload,
-                        deviceId: verify.deviceId,
-                      })
-                    )
-                  }
-                >
-                  Confirm Payment
-                </Button>
-                <div className="text-xs text-slate-400">Expected: booking becomes active; device command queued for disinfection.</div>
-              </CardBody>
-            </Card>
-
-            <Card className="md:col-span-1">
-              <CardHeader>
-                <div className="font-semibold">3) Complete → Release locker</div>
-                <div className="text-xs text-slate-400">Calls: POST /api/complete</div>
-              </CardHeader>
-              <CardBody className="space-y-2">
-                <div>
-                  <Label>Locker ID</Label>
-                  <Input value={complete.lockerId} onChange={(e) => setComplete({ ...complete, lockerId: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Device ID</Label>
-                  <Input value={complete.deviceId} onChange={(e) => setComplete({ ...complete, deviceId: e.target.value })} />
-                </div>
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    id="ok"
-                    name="ok"
-                    type="checkbox"
-                    aria-label="Disinfection success"
-                    checked={complete.success}
-                    onChange={(e) => setComplete({ ...complete, success: e.target.checked })}
-                  />
-                  <Label htmlFor="ok">Disinfection success</Label>
-                </div>
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    run(() =>
-                      deviceComplete({
-                        lockerId: complete.lockerId,
-                        deviceId: complete.deviceId,
-                        success: complete.success,
-                      })
-                    )
-                  }
-                >
-                  Complete
-                </Button>
-                <div className="text-xs text-slate-400">Expected: booking becomes completed; locker becomes available.</div>
-              </CardBody>
-            </Card>
+          <div className="text-xs text-slate-400">
+            Booking lifecycle: <span className="text-slate-200">Reserved → Pending payment → Active → Completed</span>
           </div>
-
           {error ? <div className="text-sm text-red-300">{error}</div> : null}
+          {msg ? <div className="text-sm text-emerald-300">{msg}</div> : null}
+        </CardBody>
+      </Card>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Last response</div>
-              <Badge color={ok ? "green" : "slate"}>{ok ? "ok" : "—"}</Badge>
+      <Card>
+        <CardHeader>
+          <div className="font-semibold">1) Reserved bookings (verify QR)</div>
+          <div className="text-sm text-slate-400">Click Verify & Unlock for the booking the user just reserved.</div>
+        </CardHeader>
+        <CardBody className="space-y-2">
+          {grouped.reserved.map((b) => (
+            <div key={b.id} className="rounded-xl border border-slate-800 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm">
+                <div className="font-semibold">{b.id}</div>
+                <div className="text-slate-400">Locker: {b.lockerId}</div>
+              </div>
+              <Button
+                size="sm"
+                disabled={busyId === b.id}
+                onClick={() =>
+                  run(
+                    b.id,
+                    () =>
+                      deviceVerifyQr({
+                        bookingId: b.id,
+                        lockerId: b.lockerId,
+                        token: bookingToken(b),
+                        deviceId: "ADMIN-CONSOLE",
+                      }),
+                    `Booking ${b.id} moved to pending payment.`
+                  )
+                }
+              >
+                Verify & Unlock
+              </Button>
             </div>
-            <pre className="mt-2 max-h-72 overflow-auto text-xs text-slate-200">{pretty(last)}</pre>
-          </div>
+          ))}
+          {grouped.reserved.length === 0 ? <div className="text-sm text-slate-400">No reserved bookings.</div> : null}
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="font-semibold">How to use this for your thesis demo</div>
-          <div className="text-sm text-slate-400">No physical scanner required (Option B)</div>
+          <div className="font-semibold">2) Pending payment (confirm payment)</div>
+          <div className="text-sm text-slate-400">Click Confirm Payment after user pays ₱25.</div>
         </CardHeader>
-        <CardBody className="text-sm text-slate-300 space-y-2">
-          <div>1) Customer reserves a locker on <span className="text-slate-100">/app/lockers</span>.</div>
-          <div>2) Customer opens <span className="text-slate-100">/app/booking</span> and shows the QR.</div>
-          <div>3) Admin goes here and inputs bookingId + lockerId + token, then clicks <span className="text-slate-100">Verify & Unlock</span>.</div>
-          <div>4) Admin inputs a simulated payment payload and clicks <span className="text-slate-100">Confirm Payment</span> (UV-C can proceed).</div>
-          <div>5) Admin clicks <span className="text-slate-100">Complete</span> to release the locker.</div>
+        <CardBody className="space-y-2">
+          {grouped.pendingPayment.map((b) => (
+            <div key={b.id} className="rounded-xl border border-slate-800 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm">
+                <div className="font-semibold">{b.id}</div>
+                <div className="text-slate-400">Locker: {b.lockerId}</div>
+              </div>
+              <Button
+                size="sm"
+                disabled={busyId === b.id}
+                onClick={() =>
+                  run(
+                    b.id,
+                    () =>
+                      deviceConfirmPayment({
+                        lockerId: b.lockerId,
+                        provider: "gcash",
+                        paymentPayload: bookingToken(b),
+                        deviceId: "ADMIN-CONSOLE",
+                      }),
+                    `Booking ${b.id} moved to active.`
+                  )
+                }
+              >
+                Confirm payment
+              </Button>
+            </div>
+          ))}
+          {grouped.pendingPayment.length === 0 ? <div className="text-sm text-slate-400">No pending-payment bookings.</div> : null}
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="font-semibold">Maintenance (Emulator / Spark demos)</div>
-          <div className="text-sm text-slate-400">Manual triggers to keep the demo smooth</div>
+          <div className="font-semibold">3) Active bookings (complete & release)</div>
+          <div className="text-sm text-slate-400">Click Complete & Release once user finishes sanitization and unlock.</div>
         </CardHeader>
-        <CardBody className="flex flex-wrap gap-2">
-          <Button variant="secondary" disabled={busy} onClick={() => run(() => expireNow())}>
+        <CardBody className="space-y-2">
+          {grouped.active.map((b) => (
+            <div key={b.id} className="rounded-xl border border-slate-800 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm">
+                <div className="font-semibold">{b.id}</div>
+                <div className="text-slate-400">Locker: {b.lockerId}</div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busyId === b.id}
+                onClick={() =>
+                  run(
+                    b.id,
+                    () =>
+                      deviceComplete({
+                        lockerId: b.lockerId,
+                        deviceId: "ADMIN-CONSOLE",
+                        success: true,
+                      }),
+                    `Booking ${b.id} completed and locker released.`
+                  )
+                }
+              >
+                Complete & Release
+              </Button>
+            </div>
+          ))}
+          {grouped.active.length === 0 ? <div className="text-sm text-slate-400">No active bookings.</div> : null}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="font-semibold">Maintenance</div>
+          <div className="text-sm text-slate-400">Use if timers are overdue and lockers are stuck.</div>
+        </CardHeader>
+        <CardBody>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              setError(null);
+              setMsg(null);
+              try {
+                await expireNow();
+                setMsg("Expiry run complete.");
+              } catch (e: any) {
+                setError(e?.message ?? String(e));
+              }
+            }}
+          >
             Run expiry now
           </Button>
-          <div className="text-xs text-slate-400 self-center">
-            Expires overdue bookings and releases lockers (same logic as the scheduled job).
-          </div>
         </CardBody>
       </Card>
     </div>

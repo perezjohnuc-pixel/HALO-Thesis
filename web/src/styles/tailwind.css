@@ -6,6 +6,16 @@
   color-scheme: dark;
 }
 
+@layer base {
+  body {
+    @apply antialiased bg-slate-950 text-slate-100;
+  }
+
+  ::selection {
+    @apply bg-cyan-400/40 text-white;
+  }
+}
+
 /* small utility */
 .safe-area {
   padding-bottom: env(safe-area-inset-bottom);
