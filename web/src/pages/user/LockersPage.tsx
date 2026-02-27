@@ -19,8 +19,6 @@ import { useNavigate } from "react-router-dom";
 // Fixed demo pricing + duration (per your thesis flow)
 const DEFAULT_AMOUNT = 25; // PHP
 const FIXED_DURATION_MIN = 3; // minutes (used after payment)
-const SPARK_DEMO = String(import.meta.env.VITE_SPARK_DEMO || "").toLowerCase() === "true";
-
 function clientQrToken() {
   return `spark-${Math.random().toString(36).slice(2, 12)}`;
 }
@@ -77,13 +75,11 @@ export default function LockersPage() {
         amount: DEFAULT_AMOUNT,
         createdAt: serverTimestamp(),
         startAt: serverTimestamp(),
-        ...(SPARK_DEMO
-          ? {
-              qrToken: clientQrToken(),
-              qrExpiresAt: scanDeadline,
-              holdExpiresAt: scanDeadline,
-            }
-          : {})
+        // Pre-seed QR fields on client so My Booking can immediately display a QR.
+        // Backend will preserve this token and attach qrTokenHash for verification.
+        qrToken: clientQrToken(),
+        qrExpiresAt: scanDeadline,
+        holdExpiresAt: scanDeadline,
       } as any);
       navigate("/app/booking");
     } catch (e: any) {

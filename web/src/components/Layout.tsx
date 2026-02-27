@@ -42,7 +42,7 @@ const NAV_ADMIN: NavItem[] = [
   { to: "/admin/lockers", label: "Lockers", icon: Boxes },
   { to: "/admin/bookings", label: "Bookings", icon: Smartphone },
   { to: "/admin/logs", label: "Logs", icon: Clock },
-  { to: "/admin/devices", label: "Device Simulator", icon: Shield },
+  { to: "/admin/devices", label: "Operations", icon: Shield },
 ];
 
 function getHeader(pathname: string, kind: Kind): { title: string; subtitle: string } {
@@ -55,7 +55,7 @@ function getHeader(pathname: string, kind: Kind): { title: string; subtitle: str
     "/admin/lockers": { title: "Admin: Lockers", subtitle: "Provision lockers and reset state" },
     "/admin/bookings": { title: "Admin: Bookings", subtitle: "Review and manage bookings" },
     "/admin/logs": { title: "Admin: Logs", subtitle: "System audit trail" },
-    "/admin/devices": { title: "Admin: Device Simulator", subtitle: "Simulate QR scan + payment + disinfection" },
+    "/admin/devices": { title: "Admin: Operations", subtitle: "Verify booking QR, confirm payment, and release lockers" },
   };
 
   if (map[pathname]) return map[pathname];

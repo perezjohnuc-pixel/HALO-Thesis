@@ -135,11 +135,9 @@ export const onBookingCreated = onDocumentWritten("bookings/{bookingId}", async 
   const lockerRef = db.doc(`lockers/${lockerId}`);
 
   const now = admin.firestore.Timestamp.now();
-  const qrToken = randomToken(30);
+  const fallbackToken = randomToken(30);
   const qrExpiresAt = tsPlusMs(now, SCAN_TTL_MS);
   const holdExpiresAt = qrExpiresAt;
-
-  const qrTokenHash = sha256Hex(`${qrToken}|${QR_SECRET}`);
 
   await db.runTransaction(async (tx) => {
     const [bSnap, lSnap] = await Promise.all([tx.get(bookingRef), tx.get(lockerRef)]);
@@ -147,8 +145,12 @@ export const onBookingCreated = onDocumentWritten("bookings/{bookingId}", async 
 
     const booking = bSnap.data() as any;
 
-    // Idempotent: do nothing if already initialized
-    if (booking.qrToken && booking.qrExpiresAt && booking.holdExpiresAt) return;
+    const existingQrToken = typeof booking.qrToken === "string" ? booking.qrToken : undefined;
+    const qrToken = existingQrToken || fallbackToken;
+    const qrTokenHash = sha256Hex(`${qrToken}|${QR_SECRET}`);
+
+    // Idempotent: do nothing if already fully initialized
+    if (booking.qrToken && booking.qrTokenHash && booking.qrExpiresAt && booking.holdExpiresAt) return;
 
     if (!lSnap.exists) {
       tx.update(bookingRef, {
