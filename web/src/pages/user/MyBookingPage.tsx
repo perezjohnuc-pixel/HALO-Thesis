@@ -17,6 +17,7 @@ import type { Booking, Locker } from "../../lib/types";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import Countdown from "../../components/Countdown";
 import StatusPill from "../../components/StatusPill";
+import api from "../../lib/api";
 
 function toMs(ts: any): number | null {
   if (!ts) return null;
@@ -27,6 +28,11 @@ function toMs(ts: any): number | null {
 
 // Thesis demo fixed price (PHP)
 const PAYMENT_AMOUNT_PHP = 25;
+const MODE_CONFIG = [
+  { id: "mist", label: "Mist Disinfection", minutes: 2 },
+  { id: "dryer", label: "Dryer", minutes: 3 },
+  { id: "uvc", label: "UV-C", minutes: 2 },
+] as const;
 
 export default function MyBookingPage() {
   const { user } = useAuth();
@@ -36,7 +42,6 @@ export default function MyBookingPage() {
   const navigate = useNavigate();
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     if (!uid) return;
@@ -110,18 +115,6 @@ export default function MyBookingPage() {
     }
   }
 
-  async function copyQrPayload() {
-    if (!displayQrPayload) return;
-    try {
-      await navigator.clipboard.writeText(displayQrPayload);
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    } finally {
-      setTimeout(() => setCopyState("idle"), 1500);
-    }
-  }
-
   if (!booking) {
     return (
       <Card>
@@ -190,6 +183,58 @@ export default function MyBookingPage() {
                 <Countdown targetMs={endMs} />
               </div>
               <div className="text-sm text-slate-400 mt-1">Your session will auto-complete when the timer ends.</div>
+            </div>
+          )}
+
+          {booking.status === "active" && (
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
+              <div>
+                <div className="font-semibold">Post-payment sanitation controls</div>
+                <div className="text-sm text-slate-400">Choose your preferred mode, run it, then unlock from app.</div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3">
+                {MODE_CONFIG.map((mode) => {
+                  const selected = selectedModes.includes(mode.id);
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      className={`rounded-xl border px-3 py-2 text-left text-sm transition ${selected ? "border-sky-400/50 bg-sky-500/10 text-sky-200" : "border-slate-800 bg-slate-900/40 text-slate-200 hover:bg-slate-900"}`}
+                      onClick={() => toggleMode(mode.id)}
+                    >
+                      <div className="font-semibold">{mode.label}</div>
+                      <div className="text-xs text-slate-400">Recommended: {mode.minutes} min</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setSequenceName("all");
+                    setSelectedModes(MODE_CONFIG.map((m) => m.id));
+                    setProgramDone(false);
+                  }}
+                >
+                  Use all in sequence
+                </Button>
+                <Button variant="secondary" size="sm" onClick={runProgram} disabled={runningProgram || selectedModes.length === 0}>
+                  {runningProgram ? "Running selected mode(s)…" : "Run selected mode(s)"}
+                </Button>
+                <Button onClick={unlockFromApp} disabled={busyUnlock || !programDone}>
+                  {busyUnlock ? "Unlocking…" : "Unlock locker from app"}
+                </Button>
+              </div>
+
+              <div className="text-xs text-slate-400">
+                {programDone
+                  ? "Sanitation complete. You can now unlock and finish this booking."
+                  : "After running your selected mode(s), Unlock becomes available."}
+              </div>
             </div>
           )}
 
