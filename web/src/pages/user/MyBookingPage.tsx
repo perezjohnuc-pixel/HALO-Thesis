@@ -415,11 +415,7 @@ export default function MyBookingPage() {
 
   const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
 
-  const refCode = useMemo(() => {
-  if (!booking) return "";
-  const token = booking.qrToken ?? (booking.id ? booking.id.slice(0, 10) : "");
-  return token;
-  }, [booking?.id, booking?.qrToken]);
+  const refCode = booking.qrToken ?? (booking.id ? booking.id.slice(0, 10) : "");
 
   const totalMin = fmtTotalMinutes(selectedModes);
 
