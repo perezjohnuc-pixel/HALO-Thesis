@@ -409,11 +409,7 @@ const paymentQrPayload = useMemo(() => {
 
   const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
 
-<<<<<<< HEAD
   const refCode = booking?.id ? booking.id.slice(0, 10) : "";
-=======
-  const refCode = booking.qrToken ?? (booking.id ? booking.id.slice(0, 10) : "");
->>>>>>> 904983f584ceb6e5125b55cf6284a1168236f430
 
   const totalMin = fmtTotalMinutes(selectedModes);
 
