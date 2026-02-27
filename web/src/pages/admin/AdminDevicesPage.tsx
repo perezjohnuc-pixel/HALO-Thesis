@@ -1,14 +1,17 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { Badge, Button, Card, CardBody, CardHeader, Input, Label, Select } from "../../components/ui";
 import {
-  deviceComplete,
-  deviceConfirmPayment,
-  deviceVerifyQr,
-  expireNow,
-  getDeviceKey,
-  setDeviceKey,
-} from "../../lib/api";
-import { collection, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
+  collection,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+  doc,
+  updateDoc,
+  serverTimestamp,
+  addDoc,
+} from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import type { Booking } from "../../lib/types";
 
@@ -29,7 +32,6 @@ function sparkTokenFor(id: string) {
 }
 
 export default function AdminDevicesPage() {
-  const [deviceKey, setKey] = useState(getDeviceKey());
 
   const [verify, setVerify] = useState({ bookingId: "", lockerId: "", token: "", deviceId: "SIM-DEVICE-01" });
   const [pay, setPay] = useState({ lockerId: "", provider: "gcash" as "gcash" | "maya" | "cash" | "unknown", paymentPayload: "" });
@@ -71,7 +73,7 @@ export default function AdminDevicesPage() {
   }
 
   function fillFromBooking(b: Booking & { id: string }) {
-    const token = b.qrToken || sparkTokenFor(b.id);
+    const token = b.id;
     setVerify((curr) => ({ ...curr, bookingId: b.id, lockerId: b.lockerId, token }));
     // For online payment simulation, we reuse the token as the "raw QR payload".
     // For cash, you can change provider to "cash" and keep payload as-is.
@@ -92,26 +94,6 @@ export default function AdminDevicesPage() {
           <Badge color="blue">Simple mode</Badge>
         </CardHeader>
         <CardBody className="grid gap-4">
-          <div>
-            <Label>Device API Key</Label>
-            <div className="flex gap-2">
-              <Input
-                value={deviceKey}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="Set the same value in functions/.env (DEVICE_API_KEY)"
-              />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setDeviceKey(deviceKey);
-                  setLast({ ok: true, message: "Saved to localStorage." });
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-
           <Card>
             <CardHeader>
               <div className="font-semibold">Quick fill from latest bookings</div>
@@ -171,16 +153,33 @@ export default function AdminDevicesPage() {
                 </div>
                 <Button
                   disabled={busy}
-                  onClick={() =>
-                    run(() =>
-                      deviceVerifyQr({
-                        bookingId: verify.bookingId,
-                        lockerId: verify.lockerId,
-                        token: verify.token,
-                        deviceId: verify.deviceId,
-                      })
-                    )
-                  }
+
+            onClick={() =>
+            run(async () => {
+              const bookingId = verify.bookingId?.trim();
+              if (!bookingId) throw new Error("Missing Booking ID");
+
+              // 1) Move booking forward
+              await updateDoc(doc(db, "bookings", bookingId), {
+                status: "pending_payment",
+                verifiedAt: serverTimestamp(),
+                lastUpdatedAt: serverTimestamp(),
+                deviceId: verify.deviceId,
+              });
+
+            await addDoc(collection(db, "logs"), {
+              type: "DEVICE_COMMAND",
+              action: "UNLOCK",
+              bookingId,
+              lockerId: verify.lockerId,
+              deviceId: verify.deviceId,
+              createdAt: serverTimestamp(),
+              message: "Simulated unlock via admin console (Spark-only).",
+            });
+
+            return { ok: true, message: "Verified. Locker unlock simulated. Status -> pending_payment." };
+          })
+        }
                 >
                   Verify & Unlock
                 </Button>
@@ -235,15 +234,32 @@ export default function AdminDevicesPage() {
                 <Button
                   disabled={busy}
                   onClick={() =>
-                    run(() =>
-                      deviceConfirmPayment({
-                        lockerId: pay.lockerId,
-                        provider: pay.provider,
-                        paymentPayload: pay.paymentPayload,
-                        deviceId: verify.deviceId,
-                      })
-                    )
-                  }
+                  run(async () => {
+                    const bookingId = verify.bookingId?.trim();
+                    if (!bookingId) throw new Error("Missing Booking ID (load a booking first)");
+
+                    await updateDoc(doc(db, "bookings", bookingId), {
+                      status: "active",
+                      paymentStatus: "paid",
+                      paymentProvider: pay.provider,
+                      paymentPayload: pay.paymentPayload,
+                      paidAt: serverTimestamp(),
+                      lastUpdatedAt: serverTimestamp(),
+                    });
+
+                    await addDoc(collection(db, "logs"), {
+                      type: "PAYMENT",
+                      action: "CONFIRMED",
+                      bookingId,
+                      lockerId: pay.lockerId,
+                      provider: pay.provider,
+                      createdAt: serverTimestamp(),
+                      message: "Simulated payment confirmation (Spark-only).",
+                    });
+
+                    return { ok: true, message: "Payment confirmed. Status -> active." };
+                  })
+                }
                 >
                   Confirm payment
                 </Button>
@@ -278,14 +294,33 @@ export default function AdminDevicesPage() {
                 <Button
                   disabled={busy}
                   onClick={() =>
-                    run(() =>
-                      deviceComplete({
-                        lockerId: complete.lockerId,
-                        deviceId: complete.deviceId,
-                        success: complete.success,
-                      })
-                    )
-                  }
+                  run(async () => {
+                    const bookingId = verify.bookingId?.trim();
+                    if (!bookingId) throw new Error("Missing Booking ID (load a booking first)");
+
+                    await updateDoc(doc(db, "bookings", bookingId), {
+                      status: complete.success ? "completed" : "cancelled",
+                      completedAt: complete.success ? serverTimestamp() : null,
+                      cancelledAt: complete.success ? null : serverTimestamp(),
+                      archived: true,
+                      lastUpdatedAt: serverTimestamp(),
+                    });
+
+                    await addDoc(collection(db, "logs"), {
+                      type: "BOOKING",
+                      action: complete.success ? "COMPLETED" : "FAILED",
+                      bookingId,
+                      lockerId: complete.lockerId,
+                      deviceId: complete.deviceId,
+                      createdAt: serverTimestamp(),
+                      message: complete.success
+                        ? "Simulated completion + release (Spark-only)."
+                        : "Simulated failure/cancel (Spark-only).",
+                    });
+
+                    return { ok: true, message: complete.success ? "Completed. Status -> completed." : "Cancelled." };
+                  })
+                }
                 >
                   Complete booking
                 </Button>
@@ -311,7 +346,11 @@ export default function AdminDevicesPage() {
           <div className="text-sm text-slate-400">Manual trigger to expire overdue bookings and release lockers</div>
         </CardHeader>
         <CardBody className="flex flex-wrap gap-2">
-          <Button variant="secondary" disabled={busy} onClick={() => run(() => expireNow())}>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => setLast({ ok: true, message: "Expiry requires Functions. Spark-only demo: do it manually in Firestore." })}
+          >
             Run expiry now
           </Button>
         </CardBody>

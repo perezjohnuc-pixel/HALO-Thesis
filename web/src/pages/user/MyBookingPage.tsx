@@ -196,41 +196,35 @@ export default function MyBookingPage() {
   const endMs = useMemo(() => toMs((booking as any)?.endAt), [booking]);
 
   const lockerQrPayload = useMemo(() => {
-    const b = booking;
-    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
-    if (!qrToken) return null;
-    if (!b) return null;
+  const b = booking;
+  const qrToken = b?.id ?? null;
+  if (!qrToken || !b) return null;
 
-    // QR scanned by the locker. Locker should verify BOTH lockerId + token.
-    // This prevents other lockers from accepting the wrong user's QR.
-    return JSON.stringify({
-      v: 1,
-      type: "unlock",
-      bookingId: b.id,
-      lockerId: b.lockerId,
-      token: qrToken,
-    });
-  }, [booking]);
+  return JSON.stringify({
+    v: 1,
+    type: "unlock",
+    bookingId: b.id,
+    lockerId: b.lockerId,
+    token: qrToken,
+  });
+}, [booking]);
 
-  const paymentQrPayload = useMemo(() => {
-    const b = booking;
-    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
-    if (!qrToken) return null;
-    if (!b) return null;
+const paymentQrPayload = useMemo(() => {
+  const b = booking;
+  const qrToken = b?.id ?? null;
+  if (!qrToken || !b) return null;
 
-    // For demo: structured payload representing an e-wallet payment request.
-    // (In production, replace with a provider/merchant QR from GCash/Maya, etc.)
-    const amount = typeof (b as any).amount === "number" ? (b as any).amount : PAYMENT_AMOUNT_PHP;
-    return JSON.stringify({
-      v: 1,
-      type: "pay",
-      bookingId: b.id,
-      lockerId: b.lockerId,
-      amount,
-      currency: "PHP",
-      ref: qrToken,
-    });
-  }, [booking]);
+  const amount = typeof (b as any).amount === "number" ? (b as any).amount : PAYMENT_AMOUNT_PHP;
+  return JSON.stringify({
+    v: 1,
+    type: "pay",
+    bookingId: b.id,
+    lockerId: b.lockerId,
+    amount,
+    currency: "PHP",
+    ref: qrToken,
+  });
+}, [booking]);
 
   async function cancel() {
     if (!booking?.id) return;
@@ -415,7 +409,7 @@ export default function MyBookingPage() {
 
   const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
 
-  const refCode = booking.qrToken ?? (booking.id ? booking.id.slice(0, 10) : "");
+  const refCode = booking?.id ? booking.id.slice(0, 10) : "";
 
   const totalMin = fmtTotalMinutes(selectedModes);
 
