@@ -42,6 +42,12 @@ export default function MyBookingPage() {
   const navigate = useNavigate();
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [selectedModes, setSelectedModes] = useState<string[]>(["mist"]);
+  const [sequenceName, setSequenceName] = useState<"custom" | "all">("custom");
+  const [runningProgram, setRunningProgram] = useState(false);
+  const [programDone, setProgramDone] = useState(false);
+  const [busyUnlock, setBusyUnlock] = useState(false);
 
   useEffect(() => {
     if (!uid) return;
@@ -112,6 +118,63 @@ export default function MyBookingPage() {
       await updateDoc(ref, { status: "cancelled" } as any);
     } catch (e: any) {
       setErr(e.message ?? String(e));
+    }
+  }
+
+  async function copyQrPayload() {
+    if (!displayQrPayload) return;
+    try {
+      await navigator.clipboard.writeText(displayQrPayload);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    } finally {
+      setTimeout(() => setCopyState("idle"), 1500);
+    }
+  }
+
+  function toggleMode(modeId: string) {
+    setProgramDone(false);
+    setSequenceName("custom");
+    setSelectedModes((curr) =>
+      curr.includes(modeId) ? curr.filter((id) => id !== modeId) : [...curr, modeId]
+    );
+  }
+
+  async function runProgram() {
+    if (selectedModes.length === 0) {
+      setErr("Please choose at least one sanitation mode before running.");
+      return;
+    }
+
+    setErr(null);
+    setRunningProgram(true);
+    setProgramDone(false);
+    const totalMs = selectedModes.reduce((acc, modeId) => {
+      const mode = MODE_CONFIG.find((m) => m.id === modeId);
+      return acc + (mode ? mode.minutes * 1000 : 0);
+    }, 0);
+
+    window.setTimeout(() => {
+      setRunningProgram(false);
+      setProgramDone(true);
+    }, Math.max(1200, totalMs));
+  }
+
+  async function unlockFromApp() {
+    if (!booking?.id) return;
+    if (!programDone) {
+      setErr("Run and finish your selected sanitation mode first.");
+      return;
+    }
+    setErr(null);
+    setBusyUnlock(true);
+    try {
+      await api.userCompleteBooking({ bookingId: booking.id, selectedModes, sequenceName });
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusyUnlock(false);
     }
   }
 
