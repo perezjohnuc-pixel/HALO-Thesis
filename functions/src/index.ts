@@ -391,7 +391,6 @@ export const reconcileLockers = onSchedule("every 5 minutes", async () => {
 
   await Promise.all(
     snap.docs.map(async (doc) => {
-      const lockerId = doc.id;
       const locker = doc.data() as any;
       const bookingId = locker.currentBookingId as string | undefined;
       if (!bookingId) return;
