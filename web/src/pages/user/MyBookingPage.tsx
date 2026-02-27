@@ -36,6 +36,7 @@ export default function MyBookingPage() {
   const navigate = useNavigate();
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     if (!uid) return;
@@ -106,6 +107,18 @@ export default function MyBookingPage() {
       await updateDoc(ref, { status: "cancelled" } as any);
     } catch (e: any) {
       setErr(e.message ?? String(e));
+    }
+  }
+
+  async function copyQrPayload() {
+    if (!displayQrPayload) return;
+    try {
+      await navigator.clipboard.writeText(displayQrPayload);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    } finally {
+      setTimeout(() => setCopyState("idle"), 1500);
     }
   }
 
@@ -200,6 +213,11 @@ export default function MyBookingPage() {
                   )}
                 </div>
                 <div className="mt-2 text-xs text-slate-500 break-all">{displayQrPayload}</div>
+                <div className="mt-3">
+                  <Button variant="secondary" size="sm" onClick={copyQrPayload}>
+                    {copyState === "copied" ? "QR payload copied" : copyState === "failed" ? "Copy failed" : "Copy QR payload"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
