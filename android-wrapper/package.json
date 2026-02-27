@@ -1,0 +1,17 @@
+{
+  "name": "halo-android-wrapper",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && npx cap init HALOThesis com.halo.thesis --web-dir ../web/dist",
+    "add:android": "npx cap add android",
+    "sync": "npx cap sync",
+    "open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/cli": "^6.1.2"
+  }
+}

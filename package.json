@@ -1,0 +1,13 @@
+{
+  "name": "halo-thesis",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix web && npm install --prefix functions && npm install --prefix android-wrapper",
+    "dev:web": "npm --prefix web run dev",
+    "build:web": "npm --prefix web run build",
+    "build:functions": "npm --prefix functions run build",
+    "emulators": "npm --prefix functions run build && firebase emulators:start",
+    "deploy:hosting": "npm --prefix web run build && firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules"
+  }
+}

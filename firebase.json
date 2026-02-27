@@ -1,0 +1,57 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "functions": { "port": 5001 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true, "port": 4000 }
+  },
+  "hosting": {
+    "public": "web/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=31536000,immutable"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/api/verify",
+        "function": "verifyQrAndUnlock"
+      },
+      {
+        "source": "/api/confirmPayment",
+        "function": "confirmPaymentAndStartDisinfection"
+      },
+      {
+        "source": "/api/complete",
+        "function": "completeBookingAndReleaseLocker"
+      },
+      {
+        "source": "/api/expireNow",
+        "function": "expireNow"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

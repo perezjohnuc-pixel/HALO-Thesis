@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function myUser() {
+      return signedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        : null;
+    }
+
+    function isAdmin() {
+      return signedIn() && myUser() != null && myUser().role == "admin";
+    }
+
+    // ----- Users -----
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+
+      // Allow user profile creation by the user themselves.
+      // We only validate *shape* here to avoid brittle timestamp equality checks.
+      allow create: if isSelf(uid)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == "user"
+        && request.resource.data.createdAt is timestamp;
+
+      // User can update safe fields only (no role / createdAt / uid changes)
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && !request.resource.data.diff(resource.data).changedKeys()
+                 .hasAny(["role", "createdAt", "uid"]));
+
+      allow delete: if isAdmin();
+    }
+
+    // ----- Lockers -----
+    match /lockers/{lockerId} {
+      allow read: if signedIn();
+      // Only admin or backend (Admin SDK bypasses rules) can write lockers.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ----- Bookings -----
+    match /bookings/{bookingId} {
+      // Client creates only a RESERVED booking; backend fills QR + expiry.
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.lockerId is string
+        && request.resource.data.status == "reserved"
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.startAt is timestamp
+        && request.resource.data.durationMin is int
+        && request.resource.data.durationMin > 0
+        && request.resource.data.amount is int
+        && request.resource.data.amount == 25;
+
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+
+      // User cancel: only allowed transition by clients.
+      allow update: if isAdmin()
+        || (signedIn()
+            && resource.data.userId == request.auth.uid
+            && request.resource.data.diff(resource.data).changedKeys()
+                 .hasOnly(["status"])
+            && request.resource.data.status == "cancelled");
+
+      allow delete: if isAdmin();
+    }
+
+    // ----- Payments -----
+    match /payments/{paymentId} {
+      // Payments are written by backend (Cloud Functions using Admin SDK).
+      // Clients are NOT allowed to create payment docs.
+      allow create: if false;
+
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+
+      // Only admin/server can mark as paid/failed/etc.
+      allow update, delete: if isAdmin();
+    }
+
+    // ----- Logs -----
+    match /logs/{logId} {
+      // Client cannot create logs (backend only).
+      allow create: if false;
+
+      // Admin can read everything; users can read only their own logs.
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ----- Device Commands -----
+    match /deviceCommands/{cmdId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
