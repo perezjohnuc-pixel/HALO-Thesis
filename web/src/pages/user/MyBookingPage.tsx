@@ -17,7 +17,7 @@ import type { Booking, Locker } from "../../lib/types";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import Countdown from "../../components/Countdown";
 import StatusPill from "../../components/StatusPill";
-import { userCompleteBooking } from "../../lib/api";
+import api from "../../lib/api";
 
 function toMs(ts: any): number | null {
   if (!ts) return null;
@@ -170,7 +170,7 @@ export default function MyBookingPage() {
     setErr(null);
     setBusyUnlock(true);
     try {
-      await userCompleteBooking({ bookingId: booking.id, selectedModes, sequenceName });
+      await api.userCompleteBooking({ bookingId: booking.id, selectedModes, sequenceName });
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {

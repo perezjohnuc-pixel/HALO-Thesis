@@ -81,3 +81,15 @@ export function expireNow() {
 export function userCompleteBooking(input: { bookingId: string; selectedModes: string[]; sequenceName: string }) {
   return postJsonAsUser<any>("/api/user/complete", input);
 }
+
+const api = {
+  getDeviceKey,
+  setDeviceKey,
+  deviceVerifyQr,
+  deviceConfirmPayment,
+  deviceComplete,
+  expireNow,
+  userCompleteBooking,
+};
+
+export default api;
