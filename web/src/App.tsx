@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
+import AuthPage from "./pages/auth/AuthPage";
 import Layout from "./components/Layout";
 import UserHome from "./pages/user/UserHome";
 import LockersPage from "./pages/user/LockersPage";
@@ -17,7 +18,7 @@ import AdminDevicesPage from "./pages/admin/AdminDevicesPage";
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="p-6">Loading...</div>;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/auth/login" replace />;
   return <>{children}</>;
 }
 
@@ -31,7 +32,7 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
 function Landing() {
   const { userDoc, loading } = useAuth();
   if (loading) return <div className="p-6">Loading...</div>;
-  if (!userDoc) return <Navigate to="/login" replace />;
+  if (!userDoc) return <Navigate to="/auth/login" replace />;
   return <Navigate to={userDoc.role === "admin" ? "/admin" : "/app"} replace />;
 }
 
@@ -40,8 +41,13 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/login" element={<Navigate to="/auth/login" replace />} />
+        <Route path="/register" element={<Navigate to="/auth/register" replace />} />
+        <Route path="/auth" element={<AuthPage />}>
+          <Route path="login" element={<LoginPage />} />
+          <Route path="register" element={<RegisterPage />} />
+          <Route index element={<Navigate to="/auth/login" replace />} />
+        </Route>
 
         <Route
           path="/app"
