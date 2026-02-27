@@ -28,6 +28,7 @@ function toMs(ts: any): number | null {
 
 // Thesis demo fixed price (PHP)
 const PAYMENT_AMOUNT_PHP = 25;
+const SPARK_DEMO = String(import.meta.env.VITE_SPARK_DEMO || "").toLowerCase() === "true";
 const MODE_CONFIG = [
   { id: "mist", label: "Mist Disinfection", minutes: 2 },
   { id: "dryer", label: "Dryer", minutes: 3 },
@@ -82,31 +83,37 @@ export default function MyBookingPage() {
   const endMs = useMemo(() => toMs((booking as any)?.endAt), [booking]);
 
   const lockerQrPayload = useMemo(() => {
-    if (!booking?.qrToken) return null;
+    const b = booking;
+    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
+    if (!qrToken) return null;
+    if (!b) return null;
     // QR scanned by the locker. Locker should verify BOTH lockerId + token.
     // This prevents other lockers from accepting the wrong user's QR.
     return JSON.stringify({
       v: 1,
       type: "unlock",
-      bookingId: booking.id,
-      lockerId: booking.lockerId,
-      token: booking.qrToken
+      bookingId: b.id,
+      lockerId: b.lockerId,
+      token: qrToken
     });
   }, [booking]);
 
   const paymentQrPayload = useMemo(() => {
-    if (!booking?.qrToken) return null;
+    const b = booking;
+    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
+    if (!qrToken) return null;
+    if (!b) return null;
     // For demo: structured payload representing an e-wallet payment request.
     // (In production, replace with a provider/merchant QR from GCash/Maya, etc.)
-    const amount = typeof (booking as any).amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
+    const amount = typeof (b as any).amount === "number" ? (b as any).amount : PAYMENT_AMOUNT_PHP;
     return JSON.stringify({
       v: 1,
       type: "pay",
-      bookingId: booking.id,
-      lockerId: booking.lockerId,
+      bookingId: b.id,
+      lockerId: b.lockerId,
       amount,
       currency: "PHP",
-      ref: booking.qrToken
+      ref: qrToken
     });
   }, [booking]);
 
@@ -198,6 +205,7 @@ export default function MyBookingPage() {
   const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
   const displayQrPayload = booking.status === "pending_payment" ? paymentQrPayload : lockerQrPayload;
   const showQr = (booking.status === "reserved" || booking.status === "pending_payment") && !!displayQrPayload;
+  const showSparkPaymentQr = SPARK_DEMO && booking.status === "reserved" && !!paymentQrPayload;
 
   return (
     <div className="space-y-4">
@@ -326,6 +334,21 @@ export default function MyBookingPage() {
                     {copyState === "copied" ? "QR payload copied" : copyState === "failed" ? "Copy failed" : "Copy QR payload"}
                   </Button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {showSparkPaymentQr && (
+            <div className="mt-4 grid gap-4 md:grid-cols-2 items-start">
+              <div className="rounded-2xl bg-white p-4 text-slate-950 inline-flex justify-center">
+                <QRCode value={paymentQrPayload as string} size={180} />
+              </div>
+              <div>
+                <div className="font-semibold">Payment QR (Spark demo)</div>
+                <div className="text-sm text-slate-400">
+                  Spark mode is enabled, so this payment QR is shown immediately after reservation for demo-only flows.
+                </div>
+                <div className="mt-2 text-xs text-slate-500 break-all">{paymentQrPayload}</div>
               </div>
             </div>
           )}
