@@ -116,6 +116,32 @@ export default function LockersPage() {
         </CardBody>
       </Card>
 
+      {myBooking ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold">Your current booking</div>
+                <div className="text-sm text-slate-400">
+                  You can only reserve <b>one locker at a time</b>. Continue your current flow.
+                </div>
+              </div>
+              <StatusPill status={myBooking.data.status} />
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm text-slate-300">
+                Locker: <span className="font-semibold text-slate-100">{myBooking.data.lockerId}</span>
+                <span className="text-slate-500"> · Booking ID: </span>
+                <span className="font-mono text-xs text-slate-200">{myBooking.id}</span>
+              </div>
+              <Button onClick={() => navigate("/app/booking")}>Go to My Booking</Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {sorted.map((l) => {
           const canReserve = l.data.status === "available" && !myBooking;
@@ -133,19 +159,21 @@ export default function LockersPage() {
                       Battery: {l.data.batteryPct ?? "—"}% • Last heartbeat: {l.data.lastHeartbeatAt ? "OK" : "—"}
                     </div>
                   </div>
-                  <Button
-                    disabled={!canReserve || busy}
-                    onClick={() => reserve(l.id)}
-                    title={
-                      myBooking
-                        ? "Finish/cancel your current booking first"
-                        : l.data.status !== "available"
+                  {myBooking ? (
+                    <Button variant="secondary" onClick={() => navigate("/app/booking")}>Go to booking</Button>
+                  ) : (
+                    <Button
+                      disabled={!canReserve || busy}
+                      onClick={() => reserve(l.id)}
+                      title={
+                        l.data.status !== "available"
                           ? "Not available"
                           : "Reserve"
-                    }
-                  >
-                    Reserve
-                  </Button>
+                      }
+                    >
+                      Reserve
+                    </Button>
+                  )}
                 </div>
               </CardBody>
             </Card>

@@ -45,6 +45,10 @@
         "function": "expireNow"
       },
       {
+        "source": "/api/user/startProgram",
+        "function": "userStartProgram"
+      },
+      {
         "source": "/api/user/complete",
         "function": "userCompleteBooking"
       },

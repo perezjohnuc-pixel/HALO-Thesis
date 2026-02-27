@@ -136,8 +136,10 @@ That key is used by the **device simulation** calls (`/api/*`).
 
 1) **User reserves** a locker → status `reserved` and backend generates QR token (3 min scan window)
 2) **Device scans the QR** → calls `/api/verify` → status becomes `pending_payment` (2 min payment window)
-3) **Device scans payment QR** (GCash/Maya payload) → calls `/api/confirmPayment` → status becomes `active` and a `deviceCommands` doc is queued
-4) **Device completes session** → calls `/api/complete` → status becomes `completed` and locker is released
+3) **User chooses payment method** (Cash / Online) → device confirms payment by calling `/api/confirmPayment`
+   - `provider: "cash" | "gcash" | "maya"`
+4) After payment, booking becomes `active` and a `deviceCommands` doc is queued
+5) **Device completes session** → calls `/api/complete` → status becomes `completed` and locker is released
 
 ### Quick manual test (Postman / curl)
 
@@ -155,6 +157,12 @@ curl -X POST http://localhost:5000/api/confirmPayment \
   -H "Content-Type: application/json" \
   -H "x-halo-device-key: YOUR_KEY" \
   -d '{"lockerId":"...","paymentPayload":"<raw-qr>","provider":"gcash","deviceId":"SIM-01"}'
+
+# cash example
+curl -X POST http://localhost:5000/api/confirmPayment \
+  -H "Content-Type: application/json" \
+  -H "x-halo-device-key: YOUR_KEY" \
+  -d '{"lockerId":"...","paymentPayload":"CASH-REF-123","provider":"cash","deviceId":"SIM-01"}'
 
 # complete
 curl -X POST http://localhost:5000/api/complete \
@@ -194,8 +202,13 @@ If you use HTTP, Android may require **cleartext**; see `android-wrapper/android
 ## Where to adjust your thesis-specific settings
 
 - Amount: `web/src/pages/user/LockersPage.tsx` (`DEFAULT_AMOUNT = 25`)
-- Duration default: same file (`DEFAULT_DURATION = 3`)
+- Duration default: same file (`FIXED_DURATION_MIN = 3`)
 - Timers:
   - Scan window: `functions/src/index.ts` (`SCAN_TTL_MS`)
   - Payment window: `functions/src/index.ts` (`PAYMENT_TTL_MS`)
 - UV-C seconds: `functions/.env` (`DEFAULT_UV_SECONDS`) and `functions/src/index.ts`
+
+## Demo helpers (for panel presentations)
+
+- **Sanitation timers speed-up:** set `VITE_DEMO_SPEED=30` in `web/.env` (or set to `1` for real minutes)
+- **Spark demo shortcut:** set `VITE_SPARK_DEMO=true` to show a payment QR immediately after reserve (demo only)

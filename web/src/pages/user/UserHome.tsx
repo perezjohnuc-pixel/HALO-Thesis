@@ -88,8 +88,8 @@ export default function UserHome() {
         </CardHeader>
         <CardBody className="text-sm text-slate-300 space-y-2">
           <div>1) After reserve: you have <span className="font-semibold text-slate-100">3 minutes</span> to scan the QR at the locker.</div>
-          <div>2) After first scan: you have <span className="font-semibold text-slate-100">2 minutes</span> to complete payment.</div>
-          <div>3) Disinfection starts only after payment is confirmed.</div>
+          <div>2) After first scan: you have <span className="font-semibold text-slate-100">2 minutes</span> to choose a payment method and pay (cash or online).</div>
+          <div>3) After payment: sanitation runs in sequence <span className="font-semibold text-slate-100">Mist → Dryer → UV‑C</span> (skips steps you don’t choose).</div>
         </CardBody>
       </Card>
     </div>

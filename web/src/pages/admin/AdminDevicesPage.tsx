@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { Badge, Button, Card, CardBody, CardHeader, Input, Label } from "../../components/ui";
+import { Badge, Button, Card, CardBody, CardHeader, Input, Label, Select } from "../../components/ui";
 import {
   deviceComplete,
   deviceConfirmPayment,
@@ -32,7 +32,7 @@ export default function AdminDevicesPage() {
   const [deviceKey, setKey] = useState(getDeviceKey());
 
   const [verify, setVerify] = useState({ bookingId: "", lockerId: "", token: "", deviceId: "SIM-DEVICE-01" });
-  const [pay, setPay] = useState({ lockerId: "", provider: "gcash" as "gcash" | "maya" | "unknown", paymentPayload: "" });
+  const [pay, setPay] = useState({ lockerId: "", provider: "gcash" as "gcash" | "maya" | "cash" | "unknown", paymentPayload: "" });
   const [complete, setComplete] = useState({ lockerId: "", success: true, deviceId: "SIM-DEVICE-01" });
 
   const [bookings, setBookings] = useState<Array<Booking & { id: string }>>([]);
@@ -73,7 +73,9 @@ export default function AdminDevicesPage() {
   function fillFromBooking(b: Booking & { id: string }) {
     const token = b.qrToken || sparkTokenFor(b.id);
     setVerify((curr) => ({ ...curr, bookingId: b.id, lockerId: b.lockerId, token }));
-    setPay((curr) => ({ ...curr, lockerId: b.lockerId, paymentPayload: token }));
+    // For online payment simulation, we reuse the token as the "raw QR payload".
+    // For cash, you can change provider to "cash" and keep payload as-is.
+    setPay((curr) => ({ ...curr, lockerId: b.lockerId, paymentPayload: token, provider: (curr.provider ?? "gcash") as any }));
     setComplete((curr) => ({ ...curr, lockerId: b.lockerId }));
   }
 
@@ -96,7 +98,7 @@ export default function AdminDevicesPage() {
               <Input
                 value={deviceKey}
                 onChange={(e) => setKey(e.target.value)}
-                placeholder="Set the same value in functions/.env (HALO_DEVICE_KEY)"
+                placeholder="Set the same value in functions/.env (DEVICE_API_KEY)"
               />
               <Button
                 variant="secondary"
@@ -197,19 +199,38 @@ export default function AdminDevicesPage() {
                 </div>
                 <div>
                   <Label>Provider</Label>
-                  <Input
-                    value={pay.provider}
-                    onChange={(e) => setPay({ ...pay, provider: (e.target.value as any) ?? "unknown" })}
-                    placeholder="gcash | maya | unknown"
-                  />
+                  <Select value={pay.provider} onChange={(e) => setPay({ ...pay, provider: (e.target.value as any) ?? "unknown" })}>
+                    <option value="gcash">gcash</option>
+                    <option value="maya">maya</option>
+                    <option value="cash">cash</option>
+                    <option value="unknown">unknown</option>
+                  </Select>
                 </div>
                 <div>
                   <Label>Payment Payload</Label>
                   <Input
                     value={pay.paymentPayload}
                     onChange={(e) => setPay({ ...pay, paymentPayload: e.target.value })}
-                    placeholder="raw QR payload"
+                    placeholder={pay.provider === "cash" ? "e.g. CASH-REF-123" : "raw QR payload"}
                   />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => setPay((p) => ({ ...p, provider: "cash", paymentPayload: p.paymentPayload || `CASH-${Date.now()}` }))}
+                  >
+                    Use cash
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => setPay((p) => ({ ...p, provider: "gcash" }))}
+                  >
+                    Use online (GCash)
+                  </Button>
                 </div>
                 <Button
                   disabled={busy}

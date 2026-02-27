@@ -1,6 +1,15 @@
 export type UserRole = "user" | "admin";
 
-export type LockerStatus = "available" | "occupied" | "offline" | "error";
+// Locker status values written by Cloud Functions.
+// NOTE: We keep "occupied" for backwards compatibility with earlier drafts.
+export type LockerStatus =
+  | "available"
+  | "reserved"
+  | "pending_payment"
+  | "active"
+  | "occupied"
+  | "offline"
+  | "error";
 
 export type BookingStatus =
   | "reserved"
@@ -11,7 +20,10 @@ export type BookingStatus =
   | "expired"
   | "failed";
 
-export type PaymentProvider = "gcash" | "maya" | "unknown";
+// In the thesis demo we support both cash and e-wallet simulations.
+export type PaymentProvider = "gcash" | "maya" | "cash" | "unknown";
+
+export type PaymentMethod = "online" | "cash";
 
 export type FireTimestamp = any; // Firestore Timestamp or serverTimestamp() resolved value
 
@@ -62,6 +74,8 @@ export type Booking = {
   // Payment
   paidAt?: FireTimestamp | null;
   paymentId?: string | null;
+  paymentMethod?: PaymentMethod | null;
+  paymentProvider?: PaymentProvider | string | null;
 
   // Completion/cancel
   cancelledAt?: FireTimestamp | null;
@@ -69,6 +83,11 @@ export type Booking = {
   expiredAt?: FireTimestamp | null;
   failedAt?: FireTimestamp | null;
   failReason?: string | null;
+
+  // Completion metadata (filled by Cloud Functions)
+  selectedModes?: string[];
+  sequenceName?: string;
+  disinfectionOk?: boolean;
 };
 
 export type LogEvent = {
