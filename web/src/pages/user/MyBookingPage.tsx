@@ -186,6 +186,35 @@ export default function MyBookingPage() {
     }
   }
 
+
+  async function sparkMarkScanned() {
+    if (!booking?.id || !booking?.lockerId) return;
+    try {
+      const deadline = new Date(Date.now() + 2 * 60 * 1000);
+      await updateDoc(doc(db, "bookings", booking.id), {
+        status: "pending_payment",
+        holdExpiresAt: deadline as any,
+      } as any);
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    }
+  }
+
+  async function sparkMarkPaid() {
+    if (!booking?.id || !booking?.lockerId) return;
+    try {
+      const durationMin = Number((booking as any).durationMin ?? 3);
+      const endAt = new Date(Date.now() + Math.max(1, durationMin) * 60 * 1000);
+      await updateDoc(doc(db, "bookings", booking.id), {
+        status: "active",
+        paidAt: new Date() as any,
+        endAt: endAt as any,
+        holdExpiresAt: null,
+      } as any);
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    }
+  }
   if (!booking) {
     return (
       <Card>
@@ -248,6 +277,25 @@ export default function MyBookingPage() {
             </div>
           )}
 
+
+
+          {SPARK_DEMO && booking.status === "reserved" && (
+            <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/35 p-3">
+              <div className="text-sm text-slate-300">Spark helper: after user scans QR at locker, click the button below.</div>
+              <div className="mt-2">
+                <Button size="sm" variant="secondary" onClick={sparkMarkScanned}>I scanned QR at locker</Button>
+              </div>
+            </div>
+          )}
+
+          {SPARK_DEMO && booking.status === "pending_payment" && (
+            <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/35 p-3">
+              <div className="text-sm text-slate-300">Spark helper: after user pays ₱25, mark payment complete.</div>
+              <div className="mt-2">
+                <Button size="sm" variant="secondary" onClick={sparkMarkPaid}>Mark payment as paid</Button>
+              </div>
+            </div>
+          )}
           {booking.status === "active" && endMs && (
             <div className="mt-4">
               <Badge color="blue">Session time left</Badge>
