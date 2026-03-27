@@ -488,6 +488,17 @@ const paymentQrPayload = useMemo(() => {
             </div>
           </div>
 
+          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div className="font-semibold">Helmet handling instructions (realistic flow)</div>
+            <div className="mt-2 space-y-1 text-sm text-slate-300">
+              <div>• Remove electronics/intercom modules before sanitation if they are not water-resistant.</div>
+              <div>• Position helmet upright, with liner facing airflow channels and vents not blocked.</div>
+              <div>• Open visor to a half-open gap (<span className="font-semibold text-slate-100">~2–3 cm</span>) so disinfectant mist and drying air can circulate inside.</div>
+              <div>• Keep visor partially open until UV‑C step starts, then keep locker closed until completion.</div>
+              <div>• After cycle, let the helmet rest for around <span className="font-semibold text-slate-100">1 minute</span> before wearing.</div>
+            </div>
+          </div>
+
           {/* Fair-use countdown */}
           {(booking.status === "reserved" || booking.status === "pending_payment") && holdMs && (
             <div className="mt-4">
