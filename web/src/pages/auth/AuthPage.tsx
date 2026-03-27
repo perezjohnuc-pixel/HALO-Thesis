@@ -32,7 +32,7 @@ export default function AuthPage() {
           <CardBody>
             <div className="mb-6">
               <div className="text-2xl font-bold tracking-wide">HALO</div>
-              <div className="text-sm text-slate-300/90">Hygienic Automated Locker Occupancy</div>
+              <div className="text-sm text-slate-300/90">Helmet Automated Locker with Optimized Disinfection</div>
             </div>
 
             <div className="mb-6 flex gap-2">
