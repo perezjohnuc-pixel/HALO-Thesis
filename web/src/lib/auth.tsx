@@ -29,6 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let unsubUserDoc: null | (() => void) = null;
+
     const unsub = onAuthStateChanged(auth, async (u) => {
       if (unsubUserDoc) {
         unsubUserDoc();
@@ -45,12 +46,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        // Ensure user profile doc exists.
         const ref = doc(db, "users", u.uid);
         const snap = await getDoc(ref);
+
         if (!snap.exists()) {
-          // Use a concrete timestamp (instead of a serverTimestamp transform)
-          // to avoid rule/type edge-cases during thesis demos.
           await setDoc(
             ref,
             {
@@ -64,11 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             { merge: true }
           );
         } else {
-          // Update last login timestamp
           await setDoc(ref, { lastLoginAt: Timestamp.now() } as any, { merge: true });
         }
 
-        // Subscribe to user doc for role changes (admin promotion).
         unsubUserDoc = onSnapshot(ref, (s) => {
           setUserDoc(s.exists() ? (s.data() as UserDoc) : null);
           setLoading(false);
@@ -101,18 +98,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await updateProfile(cred.user, { displayName: displayName.trim() });
         }
 
-        await setDoc(
-          doc(db, "users", cred.user.uid),
-          {
-            uid: cred.user.uid,
-            email: cred.user.email ?? email,
-            displayName: displayName?.trim() || null,
-            role: "user",
-            createdAt: Timestamp.now(),
-            lastLoginAt: Timestamp.now(),
-          } satisfies UserDoc as any,
-          { merge: true }
-        );
+        // Do not create /users doc here.
+        // onAuthStateChanged will create it once, safely.
       },
       async signOut() {
         await fbSignOut(auth);
