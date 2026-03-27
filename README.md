@@ -212,3 +212,41 @@ If you use HTTP, Android may require **cleartext**; see `android-wrapper/android
 
 - **Sanitation timers speed-up:** set `VITE_DEMO_SPEED=30` in `web/.env` (or set to `1` for real minutes)
 - **Spark demo shortcut:** set `VITE_SPARK_DEMO=true` to show a payment QR immediately after reserve (demo only)
+
+---
+
+## User operation script (for your 8:30 AM presentation)
+
+Use this as your narration while demonstrating the app:
+
+1) **Reserve locker and scan**
+   - User taps **Reserve** and scans the locker QR within 3 minutes.
+   - Explain that the token is locker-bound and time-limited for safety.
+
+2) **Pay in app flow**
+   - User chooses **Online** or **Cash** and completes payment inside 2 minutes.
+   - Mention that payment confirmation moves the booking to **ACTIVE**.
+
+3) **Load helmet correctly**
+   - Place helmet upright on the rack/tray.
+   - Keep vents clear and chin strap loose.
+   - Remove accessories that should not be exposed to mist or heat (e.g., non-waterproof intercom modules).
+
+4) **Open visor for circulation (important)**
+   - Open the visor to a **half-open position (~2–3 cm gap)**.
+   - This lets disinfectant mist and airflow reach the face area/padding.
+   - Keep the locker closed while the cycle runs.
+
+5) **Run sanitation program**
+   - Recommended sequence: **Mist → Dryer → UV‑C**.
+   - Clarify that UV‑C is for enclosed chamber exposure, so users should not open the locker mid-cycle.
+
+6) **Finish and retrieve**
+   - Wait for **Program complete**, then tap **Unlock & complete**.
+   - Let helmet cool/air out for about 1 minute before wearing.
+
+### Realism notes you can say during Q&A
+
+- This prototype demonstrates timing, sequencing, and traceable logs; final deployment should include calibrated airflow and disinfectant concentration testing.
+- UV‑C effectiveness depends on exposure time, distance, shadowing, and lamp condition; periodic validation is required.
+- The app enforces fair-use time windows to avoid locker blocking and stale reservations.

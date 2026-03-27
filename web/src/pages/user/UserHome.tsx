@@ -83,13 +83,16 @@ export default function UserHome() {
 
       <Card>
         <CardHeader>
-          <div className="text-lg font-semibold">Quick tips</div>
-          <div className="text-sm text-slate-400">Fair-use timers enforced by backend</div>
+          <div className="text-lg font-semibold">Demo-ready user guide</div>
+          <div className="text-sm text-slate-400">Use this script during your presentation for a realistic flow</div>
         </CardHeader>
         <CardBody className="text-sm text-slate-300 space-y-2">
-          <div>1) After reserve: you have <span className="font-semibold text-slate-100">3 minutes</span> to scan the QR at the locker.</div>
-          <div>2) After first scan: you have <span className="font-semibold text-slate-100">2 minutes</span> to choose a payment method and pay (cash or online).</div>
-          <div>3) After payment: sanitation runs in sequence <span className="font-semibold text-slate-100">Mist → Dryer → UV‑C</span> (skips steps you don’t choose).</div>
+          <div>1) Reserve a locker, then scan the locker QR within <span className="font-semibold text-slate-100">3 minutes</span>.</div>
+          <div>2) Complete payment within <span className="font-semibold text-slate-100">2 minutes</span> (cash or e-wallet).</div>
+          <div>3) Place helmet on the rack with chin strap loose. Keep vents unobstructed for better circulation.</div>
+          <div>4) Before starting sanitation, open the visor to a <span className="font-semibold text-slate-100">half-open position (about 2–3 cm)</span> so mist and airflow can enter the face area.</div>
+          <div>5) Run sanitation in sequence <span className="font-semibold text-slate-100">Mist → Dryer → UV‑C</span> for balanced disinfection and drying.</div>
+          <div>6) Wait for <span className="font-semibold text-slate-100">Program complete</span> before unlocking to avoid interrupting UV‑C exposure time.</div>
         </CardBody>
       </Card>
     </div>
