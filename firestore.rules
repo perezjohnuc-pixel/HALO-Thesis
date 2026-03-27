@@ -11,8 +11,18 @@ service cloud.firestore {
         : null;
     }
 
+    // ✅ Spark-friendly admin:
+    // Either user doc role == admin OR email allowlist (works without Functions/custom claims)
     function isAdmin() {
-      return signedIn() && myUser() != null && myUser().role == "admin";
+      return signedIn() && (
+        // allowlist admin emails for Spark demo
+        (request.auth.token.email in [
+          "perezjohn.uc@gmail.com"
+        ])
+        ||
+        // role-based admin (if you set role=admin in users collection)
+        (myUser() != null && myUser().role == "admin")
+      );
     }
 
     // ----- Users -----
@@ -20,7 +30,6 @@ service cloud.firestore {
       allow read: if isSelf(uid) || isAdmin();
 
       // Allow user profile creation by the user themselves.
-      // We only validate *shape* here to avoid brittle timestamp equality checks.
       allow create: if isSelf(uid)
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role == "user"
@@ -38,13 +47,12 @@ service cloud.firestore {
     // ----- Lockers -----
     match /lockers/{lockerId} {
       allow read: if signedIn();
-      // Only admin or backend (Admin SDK bypasses rules) can write lockers.
       allow create, update, delete: if isAdmin();
     }
 
     // ----- Bookings -----
     match /bookings/{bookingId} {
-      // Client creates only a RESERVED booking; backend fills QR + expiry.
+      // Client creates only a RESERVED booking
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.lockerId is string
@@ -59,36 +67,37 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
 
-      // User cancel: only allowed transition by clients.
+      // ✅ Admin can update bookings for Spark demo workflow:
+      // reserved -> pending_payment -> active -> completed (or cancelled)
       allow update: if isAdmin()
-        || (signedIn()
-            && resource.data.userId == request.auth.uid
-            && request.resource.data.diff(resource.data).changedKeys()
-                 .hasOnly(["status"])
-            && request.resource.data.status == "cancelled");
+        || (
+          // User cancel only
+          signedIn()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["status"])
+          && request.resource.data.status == "cancelled"
+        );
 
       allow delete: if isAdmin();
     }
 
     // ----- Payments -----
     match /payments/{paymentId} {
-      // Payments are written by backend (Cloud Functions using Admin SDK).
-      // Clients are NOT allowed to create payment docs.
-      allow create: if false;
+      // Keep strict (backend only)
+      // ✅ Optionally allow admin create for Spark demo
+      allow create: if isAdmin();
 
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
 
-      // Only admin/server can mark as paid/failed/etc.
       allow update, delete: if isAdmin();
     }
 
     // ----- Logs -----
     match /logs/{logId} {
-      // Client cannot create logs (backend only).
-      allow create: if false;
+      // ✅ Allow admin to create logs for demo (admin console simulation)
+      allow create: if isAdmin();
 
-      // Admin can read everything; users can read only their own logs.
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
 

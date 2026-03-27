@@ -196,41 +196,35 @@ export default function MyBookingPage() {
   const endMs = useMemo(() => toMs((booking as any)?.endAt), [booking]);
 
   const lockerQrPayload = useMemo(() => {
-    const b = booking;
-    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
-    if (!qrToken) return null;
-    if (!b) return null;
+  const b = booking;
+  const qrToken = b?.id ?? null;
+  if (!qrToken || !b) return null;
 
-    // QR scanned by the locker. Locker should verify BOTH lockerId + token.
-    // This prevents other lockers from accepting the wrong user's QR.
-    return JSON.stringify({
-      v: 1,
-      type: "unlock",
-      bookingId: b.id,
-      lockerId: b.lockerId,
-      token: qrToken,
-    });
-  }, [booking]);
+  return JSON.stringify({
+    v: 1,
+    type: "unlock",
+    bookingId: b.id,
+    lockerId: b.lockerId,
+    token: qrToken,
+  });
+}, [booking]);
 
-  const paymentQrPayload = useMemo(() => {
-    const b = booking;
-    const qrToken = b?.qrToken ?? (SPARK_DEMO && b?.id ? `spark-${b.id.slice(0, 8)}` : null);
-    if (!qrToken) return null;
-    if (!b) return null;
+const paymentQrPayload = useMemo(() => {
+  const b = booking;
+  const qrToken = b?.id ?? null;
+  if (!qrToken || !b) return null;
 
-    // For demo: structured payload representing an e-wallet payment request.
-    // (In production, replace with a provider/merchant QR from GCash/Maya, etc.)
-    const amount = typeof (b as any).amount === "number" ? (b as any).amount : PAYMENT_AMOUNT_PHP;
-    return JSON.stringify({
-      v: 1,
-      type: "pay",
-      bookingId: b.id,
-      lockerId: b.lockerId,
-      amount,
-      currency: "PHP",
-      ref: qrToken,
-    });
-  }, [booking]);
+  const amount = typeof (b as any).amount === "number" ? (b as any).amount : PAYMENT_AMOUNT_PHP;
+  return JSON.stringify({
+    v: 1,
+    type: "pay",
+    bookingId: b.id,
+    lockerId: b.lockerId,
+    amount,
+    currency: "PHP",
+    ref: qrToken,
+  });
+}, [booking]);
 
   async function cancel() {
     if (!booking?.id) return;
@@ -415,7 +409,7 @@ export default function MyBookingPage() {
 
   const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
 
-  const refCode = booking.qrToken ?? (booking.id ? booking.id.slice(0, 10) : "");
+  const refCode = booking?.id ? booking.id.slice(0, 10) : "";
 
   const totalMin = fmtTotalMinutes(selectedModes);
 
@@ -491,6 +485,17 @@ export default function MyBookingPage() {
             <div>
               <div className="text-sm text-slate-400">Booking ID</div>
               <div className="font-mono text-xs break-all">{booking.id}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div className="font-semibold">Helmet handling instructions (realistic flow)</div>
+            <div className="mt-2 space-y-1 text-sm text-slate-300">
+              <div>• Remove electronics/intercom modules before sanitation if they are not water-resistant.</div>
+              <div>• Position helmet upright, with liner facing airflow channels and vents not blocked.</div>
+              <div>• Open visor to a half-open gap (<span className="font-semibold text-slate-100">~2–3 cm</span>) so disinfectant mist and drying air can circulate inside.</div>
+              <div>• Keep visor partially open until UV‑C step starts, then keep locker closed until completion.</div>
+              <div>• After cycle, let the helmet rest for around <span className="font-semibold text-slate-100">1 minute</span> before wearing.</div>
             </div>
           </div>
 
