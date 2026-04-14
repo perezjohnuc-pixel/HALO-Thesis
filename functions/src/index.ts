@@ -17,7 +17,6 @@ app.use(express.json());
 const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
 
-const SCAN_TTL_MS = 3 * 60 * 1000;
 const PAYMENT_TTL_MS = 2 * 60 * 1000;
 const UNLOCK_MS = 5000;
 
@@ -58,15 +57,6 @@ function stepSeconds(step: string): number {
 
 function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
-}
-
-function randomToken(len = 30) {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  let out = "";
-  for (let i = 0; i < len; i++) {
-    out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return out;
 }
 
 function safeEq(a?: string, b?: string): boolean {
@@ -444,8 +434,6 @@ app.post("/api/complete", async (req, res) => {
       const bookingRef = db.doc(`bookings/${bookingId}`);
       const bSnap = await tx.get(bookingRef);
       if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
-
-      const booking = bSnap.data() as any;
 
       tx.update(bookingRef, {
         status: "completed",
