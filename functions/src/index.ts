@@ -4,7 +4,15 @@ import cors from "cors";
 import * as crypto from "crypto";
 import * as admin from "firebase-admin";
 
-admin.initializeApp();
+admin.initializeApp({
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  }),
+  databaseURL: process.env.FIREBASE_DATABASE_URL,
+});
+
 const db = admin.firestore();
 
 const app = express();
@@ -14,6 +22,7 @@ app.use((req, _res, next) => {
   console.log(`${req.method} ${req.path}`);
   next();
 });
+
 // =========================
 // Config
 // =========================
@@ -195,6 +204,7 @@ app.post("/api/expireNow", async (req, res) => {
     await autoExpireCore(200);
     return res.json({ ok: true });
   } catch (err: any) {
+    console.error("expireNow error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -203,8 +213,11 @@ app.post("/api/expireNow", async (req, res) => {
 // Device endpoints
 // =========================
 app.post("/api/verify", async (req, res) => {
+  console.log("ENTER /api/verify");
+
   const auth = requireDeviceKey(req);
   if (!auth.ok) {
+    console.log("AUTH FAILED", auth.error);
     return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
@@ -215,7 +228,15 @@ app.post("/api/verify", async (req, res) => {
     deviceId?: string;
   };
 
+  console.log("BODY", {
+    bookingId,
+    lockerId,
+    tokenPresent: !!token,
+    deviceId,
+  });
+
   if (!bookingId || !lockerId || !token) {
+    console.log("MISSING_FIELDS");
     return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   }
 
@@ -223,10 +244,20 @@ app.post("/api/verify", async (req, res) => {
   const lockerRef = db.doc(`lockers/${lockerId}`);
 
   try {
+    console.log("BEFORE HASH");
     const expectedHash = sha256Hex(`${token}|${QR_SECRET}`);
 
+    console.log("BEFORE TRANSACTION");
     const result = await db.runTransaction(async (tx) => {
+      console.log("INSIDE TRANSACTION START");
+
       const [bSnap, lSnap] = await Promise.all([tx.get(bookingRef), tx.get(lockerRef)]);
+
+      console.log("AFTER GETS", {
+        bookingExists: bSnap.exists,
+        lockerExists: lSnap.exists,
+      });
+
       if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
       if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
 
@@ -285,6 +316,8 @@ app.post("/api/verify", async (req, res) => {
       return { ok: true as const, paymentWindowSec: Math.ceil(PAYMENT_TTL_MS / 1000) };
     });
 
+    console.log("TRANSACTION RESULT", result);
+
     if (!result.ok) return res.status(400).json(result);
 
     if ((result as any).already === "AWAITING_PAYMENT") {
@@ -297,6 +330,7 @@ app.post("/api/verify", async (req, res) => {
       paymentWindowSec: (result as any).paymentWindowSec ?? Math.ceil(PAYMENT_TTL_MS / 1000),
     });
   } catch (err: any) {
+    console.error("VERIFY ERROR", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -405,6 +439,7 @@ app.post("/api/confirmPayment", async (req, res) => {
       endsAt: (result as any).endsAt,
     });
   } catch (err: any) {
+    console.error("confirmPayment error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -462,13 +497,11 @@ app.post("/api/complete", async (req, res) => {
     if (!result.ok) return res.status(400).json(result);
     return res.json({ ok: true, bookingId: (result as any).bookingId });
   } catch (err: any) {
+    console.error("complete error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
 
-// =========================
-// User endpoints
-// =========================
 app.post("/api/user/startProgram", async (req, res) => {
   const auth = await requireUserAuth(req);
   if (!auth.ok) {
@@ -538,6 +571,7 @@ app.post("/api/user/startProgram", async (req, res) => {
     if (!result.ok) return res.status(400).json(result);
     return res.json({ ok: true, lockerId: (result as any).lockerId, steps: (result as any).steps });
   } catch (err: any) {
+    console.error("startProgram error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -611,12 +645,13 @@ app.post("/api/user/complete", async (req, res) => {
     if (!result.ok) return res.status(400).json(result);
     return res.json({ ok: true, action: "UNLOCKED", lockerId: (result as any).lockerId });
   } catch (err: any) {
+    console.error("user complete error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
 
 // =========================
-// Server start - REQUIRED BY RAILWAY
+// Server start
 // =========================
 const port = Number(process.env.PORT) || 3000;
 
