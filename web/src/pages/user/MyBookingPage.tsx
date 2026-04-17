@@ -93,14 +93,28 @@ export default function MyBookingPage() {
   }, [booking]);
 
   async function cancel() {
-    if (!booking?.id) return;
-    try {
-      const ref = doc(db, "bookings", booking.id);
-      await updateDoc(ref, { status: "cancelled" } as any);
-    } catch (e: any) {
-      setErr(e.message ?? String(e));
-    }
+  if (!booking?.id || !booking?.lockerId) return;
+
+  try {
+    const bookingRef = doc(db, "bookings", booking.id);
+    const lockerRef = doc(db, "lockers", booking.lockerId);
+
+    await updateDoc(bookingRef, {
+      status: "cancelled",
+    } as any);
+
+    await updateDoc(lockerRef, {
+      status: "available",
+      pendingPayment: false,
+      occupied: false,
+      currentBookingId: null,
+      pendingPaymentExpiresAt: null,
+      updatedAt: new Date(),
+    } as any);
+  } catch (e: any) {
+    setErr(e.message ?? String(e));
   }
+}
 
   async function copyText(v: string) {
     try {
