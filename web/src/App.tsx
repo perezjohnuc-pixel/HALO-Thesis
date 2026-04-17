@@ -9,6 +9,7 @@ import UserHome from "./pages/user/UserHome";
 import LockersPage from "./pages/user/LockersPage";
 import MyBookingPage from "./pages/user/MyBookingPage";
 import HistoryPage from "./pages/user/HistoryPage";
+import UserControlPanelPage from "./pages/user/UserControlPanelPage";
 import AdminHome from "./pages/admin/AdminHome";
 import AdminLockersPage from "./pages/admin/AdminLockersPage";
 import AdminBookingsPage from "./pages/admin/AdminBookingsPage";
@@ -61,6 +62,7 @@ export default function App() {
           <Route path="lockers" element={<LockersPage />} />
           <Route path="booking" element={<MyBookingPage />} />
           <Route path="history" element={<HistoryPage />} />
+          <Route path="control/:bookingId" element={<UserControlPanelPage />} />
         </Route>
 
         <Route
