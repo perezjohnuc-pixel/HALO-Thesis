@@ -70,11 +70,36 @@ export default function MyBookingPage() {
       setLocker(null);
       return;
     }
+
     const ref = doc(db, "lockers", booking.lockerId);
     return onSnapshot(ref, (snap) => {
       setLocker(snap.exists() ? ({ id: snap.id, ...snap.data() } as any) : null);
     });
   }, [booking?.lockerId]);
+
+  // AUTO REDIRECT TO CONTROL PANEL AFTER ADMIN CONFIRMS PAYMENT
+  useEffect(() => {
+    if (!booking?.id) return;
+
+    const paymentConfirmed =
+      (booking as any)?.paymentConfirmed === true ||
+      (booking as any)?.paymentStatus === "paid";
+
+    const userControlEnabled =
+      (booking as any)?.userControlEnabled === true;
+
+    // strict mode: admin must explicitly allow user control
+    if (booking.status === "active" && paymentConfirmed && userControlEnabled) {
+      navigate(`/app/control/${booking.id}`);
+    }
+
+    // demo fallback:
+    // if you want auto-redirect as soon as booking becomes active,
+    // even if userControlEnabled is not yet written:
+    // if (booking.status === "active" && paymentConfirmed) {
+    //   navigate(`/app/control/${booking.id}`);
+    // }
+  }, [booking, navigate]);
 
   const holdMs = useMemo(() => toMs((booking as any)?.holdExpiresAt), [booking]);
 
@@ -93,32 +118,32 @@ export default function MyBookingPage() {
   }, [booking]);
 
   async function cancel() {
-  if (!booking?.id || !booking?.lockerId) return;
+    if (!booking?.id || !booking?.lockerId) return;
 
-  try {
-    const bookingRef = doc(db, "bookings", booking.id);
-    const lockerRef = doc(db, "lockers", booking.lockerId);
+    try {
+      const bookingRef = doc(db, "bookings", booking.id);
+      const lockerRef = doc(db, "lockers", booking.lockerId);
 
-    const batch = writeBatch(db);
+      const batch = writeBatch(db);
 
-    batch.update(bookingRef, {
-      status: "cancelled",
-    } as any);
+      batch.update(bookingRef, {
+        status: "cancelled",
+      } as any);
 
-    batch.update(lockerRef, {
-      status: "available",
-      pendingPayment: false,
-      occupied: false,
-      currentBookingId: null,
-      pendingPaymentExpiresAt: null,
-      updatedAt: serverTimestamp(),
-    } as any);
+      batch.update(lockerRef, {
+        status: "available",
+        pendingPayment: false,
+        occupied: false,
+        currentBookingId: null,
+        pendingPaymentExpiresAt: null,
+        updatedAt: serverTimestamp(),
+      } as any);
 
-    await batch.commit();
-  } catch (e: any) {
-    setErr(e.message ?? String(e));
+      await batch.commit();
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    }
   }
-}
 
   async function copyText(v: string) {
     try {

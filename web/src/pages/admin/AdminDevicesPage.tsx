@@ -234,32 +234,52 @@ export default function AdminDevicesPage() {
                 <Button
                   disabled={busy}
                   onClick={() =>
-                  run(async () => {
-                    const bookingId = verify.bookingId?.trim();
-                    if (!bookingId) throw new Error("Missing Booking ID (load a booking first)");
+                    run(async () => {
+                      const bookingId = verify.bookingId?.trim();
+                      if (!bookingId) throw new Error("Missing Booking ID (load a booking first)");
 
-                    await updateDoc(doc(db, "bookings", bookingId), {
-                      status: "active",
-                      paymentStatus: "paid",
-                      paymentProvider: pay.provider,
-                      paymentPayload: pay.paymentPayload,
-                      paidAt: serverTimestamp(),
-                      lastUpdatedAt: serverTimestamp(),
-                    });
+                      await updateDoc(doc(db, "bookings", bookingId), {
+                        status: "active",
+                        paymentConfirmed: true,
+                        paymentStatus: "paid",
+                        paymentProvider: pay.provider,
+                        paymentPayload: pay.paymentPayload,
+                        paidAt: serverTimestamp(),
+                        activatedAt: serverTimestamp(),
+                        lastUpdatedAt: serverTimestamp(),
 
-                    await addDoc(collection(db, "logs"), {
-                      type: "PAYMENT",
-                      action: "CONFIRMED",
-                      bookingId,
-                      lockerId: pay.lockerId,
-                      provider: pay.provider,
-                      createdAt: serverTimestamp(),
-                      message: "Simulated payment confirmation (Spark-only).",
-                    });
+                        userControlEnabled: true,
+                        adminOverride: false,
 
-                    return { ok: true, message: "Payment confirmed. Status -> active." };
-                  })
-                }
+                        permissions: {
+                          fan: true,
+                          uvc: true,
+                          spray: true,
+                        },
+
+                        deviceStatus: {
+                          fan: false,
+                          uvc: false,
+                          spray: false,
+                        },
+                      });
+
+                      await addDoc(collection(db, "logs"), {
+                        type: "PAYMENT",
+                        action: "CONFIRMED",
+                        bookingId,
+                        lockerId: pay.lockerId,
+                        provider: pay.provider,
+                        createdAt: serverTimestamp(),
+                        message: "Payment confirmed. User controls enabled for FAN, UV-C, and SPRAY.",
+                      });
+
+                      return {
+                        ok: true,
+                        message: "Payment confirmed. Status -> active. User control panel enabled.",
+                      };
+                    })
+                  }
                 >
                   Confirm payment
                 </Button>
