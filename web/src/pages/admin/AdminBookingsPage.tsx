@@ -110,16 +110,30 @@ export default function AdminBookingsPage() {
     });
   }
 
-  async function forceCancel(bookingId: string) {
-    const ref = doc(db, "bookings", bookingId);
-    await updateDoc(ref, {
-      status: "cancelled",
-      endAt: serverTimestamp(),
-      cancelledAt: serverTimestamp(),
-      archived: true,
-      userControlEnabled: false,
-    });
-  }
+    async function forceCancel(bookingId: string, lockerId?: string) {
+      if (!lockerId) return;
+
+      const bookingRef = doc(db, "bookings", bookingId);
+      const lockerRef = doc(db, "lockers", lockerId);
+
+      await updateDoc(bookingRef, {
+        status: "cancelled",
+        endAt: serverTimestamp(),
+        cancelledAt: serverTimestamp(),
+        archived: true,
+        userControlEnabled: false,
+      });
+
+      await updateDoc(lockerRef, {
+        status: "available",
+        occupied: false,
+        currentBookingId: null,
+        reservedByUserId: null,
+        pendingPayment: false,
+        reservationExpiresAt: null,
+        pendingPaymentExpiresAt: null,
+      });
+    }
 
   async function forceComplete(bookingId: string) {
     const ref = doc(db, "bookings", bookingId);
@@ -236,7 +250,7 @@ export default function AdminBookingsPage() {
 
                     <Button
                       variant="danger"
-                      onClick={() => forceCancel(b.id)}
+                      onClick={() => forceCancel(b.id, b.lockerId)}
                       disabled={!(b.status === "reserved" || b.status === "pending_payment" || b.status === "active")}
                     >
                       Force Cancel

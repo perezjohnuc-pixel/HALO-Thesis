@@ -102,17 +102,40 @@ export default function AdminLockersPage() {
     }
   }
 
-  async function updateBookingForLocker(lockerId: string, bookingId: string, patch: Record<string, any>) {
-    setErr(null);
-    setBusy(lockerId);
-    try {
-      await updateDoc(doc(db, "bookings", bookingId), patch as any);
-    } catch (e: any) {
-      setErr(e?.message ?? String(e));
-    } finally {
-      setBusy(null);
+  async function updateBookingForLocker(
+      lockerId: string,
+      bookingId: string,
+      patch: Record<string, any>
+    ) {
+      setErr(null);
+      setBusy(lockerId);
+
+      try {
+        await updateDoc(doc(db, "bookings", bookingId), patch as any);
+
+        const nextStatus = patch.status;
+
+        if (
+          nextStatus === "cancelled" ||
+          nextStatus === "completed" ||
+          nextStatus === "expired"
+        ) {
+          await updateDoc(doc(db, "lockers", lockerId), {
+            status: "available",
+            occupied: false,
+            currentBookingId: null,
+            reservedByUserId: null,
+            pendingPayment: false,
+            reservationExpiresAt: null,
+            pendingPaymentExpiresAt: null,
+          });
+        }
+      } catch (e: any) {
+        setErr(e?.message ?? String(e));
+      } finally {
+        setBusy(null);
+      }
     }
-  }
 
   async function createLocker(e: React.FormEvent) {
     e.preventDefault();
