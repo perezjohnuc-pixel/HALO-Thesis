@@ -6,9 +6,10 @@ import {
   onSnapshot,
   orderBy,
   query,
-  updateDoc,
   where,
   limit,
+  writeBatch,
+  serverTimestamp,
 } from "firebase/firestore";
 import QRCode from "react-qr-code";
 import { db } from "../../lib/firebase";
@@ -28,7 +29,6 @@ function toMs(ts: any): number | null {
 const PAYMENT_AMOUNT_PHP = 25;
 
 function stepIndexFor(status?: string | null) {
-  // 0 Reserve -> 1 Insert Coins -> 2 In Use -> 3 Retrieve
   if (status === "reserved") return 0;
   if (status === "pending_payment") return 1;
   if (status === "active") return 2;
@@ -93,28 +93,32 @@ export default function MyBookingPage() {
   }, [booking]);
 
   async function cancel() {
-  if (!booking?.id || !booking?.lockerId) return;
+    if (!booking?.id || !booking?.lockerId) return;
 
-  try {
-    const bookingRef = doc(db, "bookings", booking.id);
-    const lockerRef = doc(db, "lockers", booking.lockerId);
+    try {
+      const bookingRef = doc(db, "bookings", booking.id);
+      const lockerRef = doc(db, "lockers", booking.lockerId);
 
-    await updateDoc(bookingRef, {
-      status: "cancelled",
-    } as any);
+      const batch = writeBatch(db);
 
-    await updateDoc(lockerRef, {
-      status: "available",
-      pendingPayment: false,
-      occupied: false,
-      currentBookingId: null,
-      pendingPaymentExpiresAt: null,
-      updatedAt: new Date(),
-    } as any);
-  } catch (e: any) {
-    setErr(e.message ?? String(e));
+      batch.update(bookingRef, {
+        status: "cancelled",
+      } as any);
+
+      batch.update(lockerRef, {
+        status: "available",
+        pendingPayment: false,
+        occupied: false,
+        currentBookingId: null,
+        pendingPaymentExpiresAt: null,
+        updatedAt: serverTimestamp(),
+      } as any);
+
+      await batch.commit();
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    }
   }
-}
 
   async function copyText(v: string) {
     try {
