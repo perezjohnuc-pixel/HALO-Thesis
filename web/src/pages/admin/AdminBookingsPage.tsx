@@ -63,6 +63,53 @@ export default function AdminBookingsPage() {
       });
   }, [bookings, status, search]);
 
+  async function confirmPaymentAndEnableControls(bookingId: string) {
+    const ref = doc(db, "bookings", bookingId);
+
+    await updateDoc(ref, {
+      paymentConfirmed: true,
+      status: "active",
+      activatedAt: serverTimestamp(),
+      userControlEnabled: true,
+      adminOverride: false,
+
+      permissions: {
+        fan: true,
+        uvc: true,
+        spray: true,
+      },
+
+      deviceStatus: {
+        fan: false,
+        uvc: false,
+        spray: false,
+      },
+    });
+  }
+
+  async function disableUserControls(bookingId: string) {
+    const ref = doc(db, "bookings", bookingId);
+
+    await updateDoc(ref, {
+      userControlEnabled: false,
+      adminOverride: true,
+    });
+  }
+
+  async function allowOnlyFanAndSpray(bookingId: string) {
+    const ref = doc(db, "bookings", bookingId);
+
+    await updateDoc(ref, {
+      userControlEnabled: true,
+      adminOverride: false,
+      permissions: {
+        fan: true,
+        uvc: false,
+        spray: true,
+      },
+    });
+  }
+
   async function forceCancel(bookingId: string) {
     const ref = doc(db, "bookings", bookingId);
     await updateDoc(ref, {
@@ -70,6 +117,7 @@ export default function AdminBookingsPage() {
       endAt: serverTimestamp(),
       cancelledAt: serverTimestamp(),
       archived: true,
+      userControlEnabled: false,
     });
   }
 
@@ -78,6 +126,7 @@ export default function AdminBookingsPage() {
     await updateDoc(ref, {
       status: "completed",
       completedAt: serverTimestamp(),
+      userControlEnabled: false,
     });
   }
 
@@ -99,6 +148,7 @@ export default function AdminBookingsPage() {
                   </option>
                 ))}
               </Select>
+
               <Input
                 placeholder="Search bookingId / lockerId / userId"
                 value={search}
@@ -110,33 +160,88 @@ export default function AdminBookingsPage() {
       </Card>
 
       <div className="grid gap-4">
-        {filtered.map((b) => (
+        {filtered.map((b: any) => (
           <Card key={b.id}>
             <CardBody>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">
-                    {b.id} <span className="text-slate-500">· {b.status}</span>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    Locker: <span className="text-slate-200">{b.lockerId}</span> · User: <span className="text-slate-200">{b.userId}</span>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Created: {fmt(b.createdAt)} · Hold expires: {fmt((b as any).holdExpiresAt)} · End: {fmt((b as any).endAt)}
-                  </div>
-                </div>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-100">
+                      {b.id} <span className="text-slate-500">· {b.status}</span>
+                    </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="secondary" onClick={() => forceComplete(b.id)} disabled={b.status !== "active"}>
-                    Mark Completed
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onClick={() => forceCancel(b.id)}
-                    disabled={!(b.status === "reserved" || b.status === "pending_payment" || b.status === "active")}
-                  >
-                    Force Cancel
-                  </Button>
+                    <div className="mt-1 text-xs text-slate-400">
+                      Locker: <span className="text-slate-200">{b.lockerId}</span> · User:{" "}
+                      <span className="text-slate-200">{b.userId}</span>
+                    </div>
+
+                    <div className="mt-1 text-xs text-slate-500">
+                      Created: {fmt(b.createdAt)} · Hold expires: {fmt(b.holdExpiresAt)} · End: {fmt(b.endAt)}
+                    </div>
+
+                    <div className="mt-2 text-xs text-slate-400">
+                      Payment:{" "}
+                      <span className="text-slate-200">
+                        {b.paymentConfirmed ? "CONFIRMED" : "NOT CONFIRMED"}
+                      </span>
+                      {" · "}
+                      User Control:{" "}
+                      <span className="text-slate-200">
+                        {b.userControlEnabled ? "ENABLED" : "DISABLED"}
+                      </span>
+                    </div>
+
+                    <div className="mt-1 text-xs text-slate-500">
+                      Permissions:
+                      {" Fan="}
+                      {b.permissions?.fan ? "Y" : "N"}
+                      {" · UV-C="}
+                      {b.permissions?.uvc ? "Y" : "N"}
+                      {" · Spray="}
+                      {b.permissions?.spray ? "Y" : "N"}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={() => confirmPaymentAndEnableControls(b.id)}
+                      disabled={!(b.status === "pending_payment" || b.status === "reserved")}
+                    >
+                      Confirm Payment + Enable Controls
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      onClick={() => allowOnlyFanAndSpray(b.id)}
+                      disabled={!b.paymentConfirmed}
+                    >
+                      Allow Fan + Spray Only
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      onClick={() => disableUserControls(b.id)}
+                      disabled={!b.paymentConfirmed}
+                    >
+                      Disable User Controls
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      onClick={() => forceComplete(b.id)}
+                      disabled={b.status !== "active"}
+                    >
+                      Mark Completed
+                    </Button>
+
+                    <Button
+                      variant="danger"
+                      onClick={() => forceCancel(b.id)}
+                      disabled={!(b.status === "reserved" || b.status === "pending_payment" || b.status === "active")}
+                    >
+                      Force Cancel
+                    </Button>
+                  </div>
                 </div>
               </div>
             </CardBody>
