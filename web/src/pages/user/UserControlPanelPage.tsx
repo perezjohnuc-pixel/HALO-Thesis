@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { doc, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { useNavigate, useParams } from "react-router-dom";
 import { db } from "../../lib/firebase";
+import { userCompleteBooking, userStartProgram } from "../../lib/api";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 
 type BookingDoc = {
@@ -22,7 +23,48 @@ type BookingDoc = {
     uvc?: boolean;
     spray?: boolean;
   };
+  selectedModes?: string[];
+  sequenceName?: string;
 };
+
+type Preset = {
+  id: "recommended" | "disinfect" | "fan" | "uvc";
+  title: string;
+  subtitle: string;
+  sequenceName: string;
+  selectedModes: string[];
+};
+
+const PRESETS: Preset[] = [
+  {
+    id: "recommended",
+    title: "Recommended Preset",
+    subtitle: "Best for standard helmet cleaning",
+    sequenceName: "recommended_preset",
+    selectedModes: ["mist", "dryer", "uvc"],
+  },
+  {
+    id: "disinfect",
+    title: "Disinfect",
+    subtitle: "Focused sanitation sequence",
+    sequenceName: "disinfect",
+    selectedModes: ["mist", "uvc"],
+  },
+  {
+    id: "fan",
+    title: "Fan Only",
+    subtitle: "Drying / airflow only",
+    sequenceName: "fan_only",
+    selectedModes: ["dryer"],
+  },
+  {
+    id: "uvc",
+    title: "UV-C Only",
+    subtitle: "UV-C only sequence",
+    sequenceName: "uvc_only",
+    selectedModes: ["uvc"],
+  },
+];
 
 export default function UserControlPanelPage() {
   const { bookingId } = useParams();
@@ -30,8 +72,11 @@ export default function UserControlPanelPage() {
 
   const [booking, setBooking] = useState<BookingDoc | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busyDevice, setBusyDevice] = useState<"fan" | "uvc" | "spray" | null>(null);
+  const [busyPreset, setBusyPreset] = useState<string | null>(null);
+  const [busyComplete, setBusyComplete] = useState(false);
+  const [lastStartedPreset, setLastStartedPreset] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!bookingId) return;
@@ -76,37 +121,57 @@ export default function UserControlPanelPage() {
     );
   }, [booking, paymentConfirmed]);
 
-  async function toggleDevice(device: "fan" | "uvc" | "spray") {
+  const activePresetLabel = useMemo(() => {
+    if (!booking?.sequenceName) return null;
+
+    const matched = PRESETS.find((p) => p.sequenceName === booking.sequenceName);
+    return matched?.title ?? booking.sequenceName;
+  }, [booking]);
+
+  async function startPreset(preset: Preset) {
     if (!bookingId || !booking) return;
     if (!canUseControls) return;
-    if (!booking.permissions?.[device]) return;
-
-    const currentValue = booking.deviceStatus?.[device] ?? false;
 
     try {
-      setBusyDevice(device);
+      setBusyPreset(preset.id);
       setErr(null);
+      setOkMsg(null);
 
-      await updateDoc(doc(db, "bookings", bookingId), {
-        [`deviceStatus.${device}`]: !currentValue,
-        lastUpdatedAt: serverTimestamp(),
+      await userStartProgram({
+        bookingId,
+        selectedModes: preset.selectedModes,
+        sequenceName: preset.sequenceName,
       });
 
-      // Optional:
-      // If later you want ESP32/backend control, add your API call here.
-      // await fetch("/api/device/control", {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify({
-      //     bookingId,
-      //     device,
-      //     value: !currentValue,
-      //   }),
-      // });
+      setLastStartedPreset(preset.title);
+      setOkMsg(`${preset.title} started successfully.`);
     } catch (e: any) {
       setErr(e.message ?? String(e));
     } finally {
-      setBusyDevice(null);
+      setBusyPreset(null);
+    }
+  }
+
+  async function completeBooking() {
+    if (!bookingId || !booking) return;
+
+    try {
+      setBusyComplete(true);
+      setErr(null);
+      setOkMsg(null);
+
+      await userCompleteBooking({
+        bookingId,
+        selectedModes: booking.selectedModes ?? [],
+        sequenceName: booking.sequenceName ?? "custom",
+      });
+
+      setOkMsg("Booking completed. Your locker will be released.");
+      navigate("/app/booking");
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setBusyComplete(false);
     }
   }
 
@@ -114,7 +179,7 @@ export default function UserControlPanelPage() {
     return (
       <Card>
         <CardHeader>
-          <div className="text-lg font-bold">Control panel</div>
+          <div className="text-lg font-bold">Locker Control Panel</div>
         </CardHeader>
         <CardBody>
           <div className="text-sm text-slate-400">Loading control panel...</div>
@@ -127,12 +192,12 @@ export default function UserControlPanelPage() {
     return (
       <Card>
         <CardHeader>
-          <div className="text-lg font-bold">Control panel</div>
+          <div className="text-lg font-bold">Locker Control Panel</div>
         </CardHeader>
         <CardBody>
           <div className="text-sm text-red-300">{err ?? "Booking not found."}</div>
           <div className="mt-4">
-            <Button onClick={() => navigate("/app/my-booking")}>Back to My Booking</Button>
+            <Button onClick={() => navigate("/app/booking")}>Back to My Booking</Button>
           </div>
         </CardBody>
       </Card>
@@ -147,9 +212,10 @@ export default function UserControlPanelPage() {
             <div>
               <div className="text-lg font-bold">Locker Control Panel</div>
               <div className="text-sm text-slate-400">
-                Control access depends on admin approval.
+                Choose a cleaning mode for your active booking.
               </div>
             </div>
+
             <Badge color={canUseControls ? "green" : "yellow"}>
               {canUseControls ? "Access Enabled" : "Restricted"}
             </Badge>
@@ -158,12 +224,14 @@ export default function UserControlPanelPage() {
 
         <CardBody>
           {err && <div className="mb-4 text-sm text-red-300">{err}</div>}
+          {okMsg && <div className="mb-4 text-sm text-emerald-300">{okMsg}</div>}
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
               <div className="text-sm text-slate-400">Booking ID</div>
               <div className="break-all font-mono text-xs">{booking.id}</div>
             </div>
+
             <div>
               <div className="text-sm text-slate-400">Locker</div>
               <div className="font-semibold">{booking.lockerId ?? "—"}</div>
@@ -195,68 +263,74 @@ export default function UserControlPanelPage() {
                 Controls are currently managed by admin.
               </div>
             )}
+
+            {activePresetLabel && (
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+                Current selected program: <b>{activePresetLabel}</b>
+              </div>
+            )}
           </div>
 
-          <div className="mt-6 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <div>
-              <div className="font-semibold">Components</div>
+              <div className="font-semibold">Choose cleaning mode</div>
               <div className="mt-1 text-sm text-slate-400">
-                Only the devices allowed by admin will appear here.
+                Start one of the available presets below.
               </div>
             </div>
 
-            {booking.permissions?.fan && (
-              <Button
-                className="w-full"
-                disabled={!canUseControls || busyDevice === "fan"}
-                onClick={() => toggleDevice("fan")}
-              >
-                {busyDevice === "fan"
-                  ? "Updating Fan..."
-                  : `Fan: ${booking.deviceStatus?.fan ? "ON" : "OFF"}`}
-              </Button>
-            )}
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {PRESETS.map((preset) => (
+                <div
+                  key={preset.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4"
+                >
+                  <div className="font-semibold">{preset.title}</div>
+                  <div className="mt-1 text-sm text-slate-400">{preset.subtitle}</div>
 
-            {booking.permissions?.uvc && (
-              <Button
-                className="w-full"
-                disabled={!canUseControls || busyDevice === "uvc"}
-                onClick={() => toggleDevice("uvc")}
-              >
-                {busyDevice === "uvc"
-                  ? "Updating UV-C..."
-                  : `UV-C: ${booking.deviceStatus?.uvc ? "ON" : "OFF"}`}
-              </Button>
-            )}
+                  <div className="mt-3 text-xs text-slate-500">
+                    Sequence: {preset.selectedModes.join(" → ")}
+                  </div>
 
-            {booking.permissions?.spray && (
-              <Button
-                className="w-full"
-                disabled={!canUseControls || busyDevice === "spray"}
-                onClick={() => toggleDevice("spray")}
-              >
-                {busyDevice === "spray"
-                  ? "Updating Spray..."
-                  : `Spray: ${booking.deviceStatus?.spray ? "ON" : "OFF"}`}
-              </Button>
-            )}
-
-            {!booking.permissions?.fan &&
-              !booking.permissions?.uvc &&
-              !booking.permissions?.spray && (
-                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm text-slate-400">
-                  No component controls are available for this booking yet.
+                  <div className="mt-4">
+                    <Button
+                      className="w-full"
+                      disabled={!canUseControls || busyPreset !== null}
+                      onClick={() => startPreset(preset)}
+                    >
+                      {busyPreset === preset.id ? "Starting..." : `Start ${preset.title}`}
+                    </Button>
+                  </div>
                 </div>
-              )}
+              ))}
+            </div>
           </div>
 
-          <div className="mt-6 flex flex-col gap-2 md:flex-row">
-            <Button variant="secondary" onClick={() => navigate("/app/my-booking")}>
-              Back to My Booking
-            </Button>
-            <Button variant="secondary" onClick={() => window.location.reload()}>
-              Refresh
-            </Button>
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div>
+              <div className="font-semibold">Finish session</div>
+              <div className="mt-1 text-sm text-slate-400">
+                Use this when the cleaning process is done and you want to complete the booking.
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2 md:flex-row">
+              <Button
+                variant="secondary"
+                disabled={busyComplete}
+                onClick={completeBooking}
+              >
+                {busyComplete ? "Completing..." : "Complete Booking"}
+              </Button>
+
+              <Button variant="secondary" onClick={() => navigate("/app/booking")}>
+                Back to My Booking
+              </Button>
+
+              <Button variant="secondary" onClick={() => window.location.reload()}>
+                Refresh
+              </Button>
+            </div>
           </div>
         </CardBody>
       </Card>
