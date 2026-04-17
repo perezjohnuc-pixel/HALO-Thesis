@@ -93,32 +93,32 @@ export default function MyBookingPage() {
   }, [booking]);
 
   async function cancel() {
-    if (!booking?.id || !booking?.lockerId) return;
+  if (!booking?.id || !booking?.lockerId) return;
 
-    try {
-      const bookingRef = doc(db, "bookings", booking.id);
-      const lockerRef = doc(db, "lockers", booking.lockerId);
+  try {
+    const bookingRef = doc(db, "bookings", booking.id);
+    const lockerRef = doc(db, "lockers", booking.lockerId);
 
-      const batch = writeBatch(db);
+    const batch = writeBatch(db);
 
-      batch.update(bookingRef, {
-        status: "cancelled",
-      } as any);
+    batch.update(bookingRef, {
+      status: "cancelled",
+    } as any);
 
-      batch.update(lockerRef, {
-        status: "available",
-        pendingPayment: false,
-        occupied: false,
-        currentBookingId: null,
-        pendingPaymentExpiresAt: null,
-        updatedAt: serverTimestamp(),
-      } as any);
+    batch.update(lockerRef, {
+      status: "available",
+      pendingPayment: false,
+      occupied: false,
+      currentBookingId: null,
+      pendingPaymentExpiresAt: null,
+      updatedAt: serverTimestamp(),
+    } as any);
 
-      await batch.commit();
-    } catch (e: any) {
-      setErr(e.message ?? String(e));
-    }
+    await batch.commit();
+  } catch (e: any) {
+    setErr(e.message ?? String(e));
   }
+}
 
   async function copyText(v: string) {
     try {
