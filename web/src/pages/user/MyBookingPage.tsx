@@ -315,46 +315,64 @@ export default function MyBookingPage() {
           )}
 
           {booking.status === "active" && (
-            <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-              <div>
-                <div className="font-semibold">Locker in use</div>
-                <div className="text-sm text-slate-400">
-                  Your payment has been confirmed and the locker is assigned to you.
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                <div className="font-semibold">Important</div>
-                <div className="mt-1 text-slate-300">
-                  Keep your personal retrieval QR. You will use it later to reopen your locker.
-                </div>
-              </div>
-
-              {retrievalQrPayload && (
-                <div className="grid items-start gap-4 md:grid-cols-2">
-                  <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
-                    <QRCode value={retrievalQrPayload} size={180} />
-                  </div>
-
-                  <div>
-                    <div className="font-semibold">Personal retrieval QR</div>
-                    <div className="text-sm text-slate-400">
-                      Present this QR when you return. The ESP32-CAM will scan it, and the backend
-                      will verify that it belongs to your active booking and locker.
-                    </div>
-
-                    <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
-
-                    <div className="mt-3">
-                      <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
-                        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy payload"}
-                      </Button>
-                    </div>
+              <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                <div>
+                  <div className="font-semibold">Locker in use</div>
+                  <div className="text-sm text-slate-400">
+                    Your payment has been confirmed and the locker is assigned to you.
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+
+                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
+                  <div className="font-semibold">Next step</div>
+                  <div className="mt-1 text-slate-300">
+                    Continue to the locker control page to choose your cleaning mode:
+                    <b> Recommended Preset</b>, <b>Disinfect</b>, <b>Fan</b>, or <b>UV-C</b>.
+                  </div>
+
+                  <div className="mt-3">
+                    <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
+                      Next
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
+                  <div className="font-semibold">Important</div>
+                  <div className="mt-1 text-slate-300">
+                    Keep your personal retrieval QR. You will use it later to reopen your locker.
+                  </div>
+                </div>
+
+                {retrievalQrPayload && (
+                  <div className="grid items-start gap-4 md:grid-cols-2">
+                    <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
+                      <QRCode value={retrievalQrPayload} size={180} />
+                    </div>
+
+                    <div>
+                      <div className="font-semibold">Personal retrieval QR</div>
+                      <div className="text-sm text-slate-400">
+                        Present this QR when you return. The ESP32-CAM will scan it, and the backend
+                        will verify that it belongs to your active booking and locker.
+                      </div>
+
+                      <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
+
+                      <div className="mt-3 flex flex-col gap-2 md:flex-row">
+                        <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
+                          Next
+                        </Button>
+
+                        <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
+                          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy payload"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
           {isTerminal && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
