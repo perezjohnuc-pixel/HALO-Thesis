@@ -119,6 +119,57 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
+app.get("/api/device/lockerStatus", async (req, res) => {
+  const auth = requireDeviceKey(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  try {
+    const lockerId = String(req.query.lockerId || "").trim();
+    if (!lockerId) {
+      return res.status(400).json({ ok: false, error: "MISSING_LOCKER_ID" });
+    }
+
+    const lockerRef = db.doc(`lockers/${lockerId}`);
+    const lockerSnap = await lockerRef.get();
+
+    if (!lockerSnap.exists) {
+      return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
+    }
+
+    const locker = lockerSnap.data() as any;
+    const currentBookingId = locker.currentBookingId ?? null;
+
+    let bookingStatus: string | null = null;
+    if (currentBookingId) {
+      const bookingRef = db.doc(`bookings/${currentBookingId}`);
+      const bookingSnap = await bookingRef.get();
+      if (bookingSnap.exists) {
+        const booking = bookingSnap.data() as any;
+        bookingStatus = booking.status ?? null;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      lockerId,
+      lockerStatus: locker.status ?? "unknown",
+      bookingStatus,
+      pendingPayment: !!locker.pendingPayment,
+      occupied: !!locker.occupied,
+      currentBookingId,
+    });
+  } catch (err: any) {
+    console.error("lockerStatus error", err);
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL",
+      message: err?.message ?? String(err),
+    });
+  }
+});
+
 // =========================
 // Manual expire helper
 // =========================
