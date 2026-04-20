@@ -26,7 +26,7 @@ function toMs(ts: any): number | null {
   return null;
 }
 
-const PAYMENT_AMOUNT_PHP = 25;
+const DEFAULT_PAYMENT_AMOUNT_PHP = 25;;
 
 function stepIndexFor(status?: string | null) {
   if (status === "reserved") return 0;
@@ -183,7 +183,7 @@ export default function MyBookingPage() {
 
   const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
   const stepIdx = stepIndexFor(booking.status);
-  const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : PAYMENT_AMOUNT_PHP;
+  const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : DEFAULT_PAYMENT_AMOUNT_PHP;
   const refCode = booking?.id ? booking.id.slice(0, 10) : "";
 
   return (
