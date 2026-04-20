@@ -23,9 +23,6 @@ app.use((req, _res, next) => {
   next();
 });
 
-// =========================
-// Config
-// =========================
 const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
 
@@ -60,18 +57,18 @@ type BookingStatus =
 
 const BLOCKING = new Set<BookingStatus>(["reserved", "pending_payment", "active"]);
 
-function stepSeconds(step: string): number {
+function stepSeconds(step: string) {
   if (step === "mist") return DEFAULT_MIST_SEC;
   if (step === "dryer") return DEFAULT_DRYER_SEC;
   if (step === "uvc") return DEFAULT_UV_SEC;
   return 0;
 }
 
-function sha256Hex(input: string): string {
+function sha256Hex(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
-function safeEq(a?: string, b?: string): boolean {
+function safeEq(a?: string, b?: string) {
   if (!a || !b) return false;
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -108,9 +105,6 @@ async function requireUserAuth(req: express.Request) {
   }
 }
 
-// =========================
-// Health check
-// =========================
 app.get("/", (_req, res) => {
   res.status(200).send("HALO Railway backend is running");
 });
@@ -142,12 +136,27 @@ app.get("/api/device/lockerStatus", async (req, res) => {
     const currentBookingId = locker.currentBookingId ?? null;
 
     let bookingStatus: string | null = null;
+    let amountDue = 0;
+    let serviceType: string | null = null;
+    let control = {
+      fan: false,
+      uvc: false,
+      lock: false,
+    };
+
     if (currentBookingId) {
       const bookingRef = db.doc(`bookings/${currentBookingId}`);
       const bookingSnap = await bookingRef.get();
       if (bookingSnap.exists) {
         const booking = bookingSnap.data() as any;
         bookingStatus = booking.status ?? null;
+        amountDue = Number(booking.amount ?? 0);
+        serviceType = booking.serviceType ?? null;
+        control = {
+          fan: !!booking?.deviceStatus?.fan,
+          uvc: !!booking?.deviceStatus?.uvc,
+          lock: !!booking?.deviceStatus?.lock,
+        };
       }
     }
 
@@ -159,6 +168,9 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       pendingPayment: !!locker.pendingPayment,
       occupied: !!locker.occupied,
       currentBookingId,
+      amountDue,
+      serviceType,
+      control,
     });
   } catch (err: any) {
     console.error("lockerStatus error", err);
@@ -170,9 +182,6 @@ app.get("/api/device/lockerStatus", async (req, res) => {
   }
 });
 
-// =========================
-// Manual expire helper
-// =========================
 async function autoExpireCore(limit = 50) {
   const now = admin.firestore.Timestamp.now();
   const LIMIT = limit;
@@ -260,15 +269,9 @@ app.post("/api/expireNow", async (req, res) => {
   }
 });
 
-// =========================
-// Device endpoints
-// =========================
 app.post("/api/verify", async (req, res) => {
-  console.log("ENTER /api/verify");
-
   const auth = requireDeviceKey(req);
   if (!auth.ok) {
-    console.log("AUTH FAILED", auth.error);
     return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
@@ -279,15 +282,7 @@ app.post("/api/verify", async (req, res) => {
     deviceId?: string;
   };
 
-  console.log("BODY", {
-    bookingId,
-    lockerId,
-    tokenPresent: !!token,
-    deviceId,
-  });
-
   if (!bookingId || !lockerId || !token) {
-    console.log("MISSING_FIELDS");
     return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   }
 
@@ -295,19 +290,10 @@ app.post("/api/verify", async (req, res) => {
   const lockerRef = db.doc(`lockers/${lockerId}`);
 
   try {
-    console.log("BEFORE HASH");
     const expectedHash = sha256Hex(`${token}|${QR_SECRET}`);
 
-    console.log("BEFORE TRANSACTION");
     const result = await db.runTransaction(async (tx) => {
-      console.log("INSIDE TRANSACTION START");
-
       const [bSnap, lSnap] = await Promise.all([tx.get(bookingRef), tx.get(lockerRef)]);
-
-      console.log("AFTER GETS", {
-        bookingExists: bSnap.exists,
-        lockerExists: lSnap.exists,
-      });
 
       if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
       if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
@@ -367,8 +353,6 @@ app.post("/api/verify", async (req, res) => {
       return { ok: true as const, paymentWindowSec: Math.ceil(PAYMENT_TTL_MS / 1000) };
     });
 
-    console.log("TRANSACTION RESULT", result);
-
     if (!result.ok) return res.status(400).json(result);
 
     if ((result as any).already === "AWAITING_PAYMENT") {
@@ -392,11 +376,12 @@ app.post("/api/confirmPayment", async (req, res) => {
     return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
-  const { lockerId, deviceId, paymentPayload, provider } = req.body as {
+  const { lockerId, deviceId, paymentPayload, provider, amountPaid } = req.body as {
     lockerId?: string;
     deviceId?: string;
     paymentPayload?: string;
     provider?: string;
+    amountPaid?: number;
   };
 
   if (!lockerId || !paymentPayload) {
@@ -437,6 +422,17 @@ app.post("/api/confirmPayment", async (req, res) => {
         return { ok: false as const, error: "PAYMENT_WINDOW_EXPIRED" };
       }
 
+      const requiredAmount = Number(booking.amount ?? 25);
+      const paid = Number(amountPaid ?? 0);
+      if (!Number.isFinite(paid) || paid < requiredAmount) {
+        return {
+          ok: false as const,
+          error: "INSUFFICIENT_PAYMENT",
+          requiredAmount,
+          amountPaid: paid,
+        };
+      }
+
       const now = admin.firestore.Timestamp.now();
       const durationMin = Number(booking.durationMin ?? 3);
       const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
@@ -447,10 +443,12 @@ app.post("/api/confirmPayment", async (req, res) => {
         userId: booking.userId ?? null,
         bookingId,
         lockerId,
-        provider: provider ?? "unknown",
+        provider: provider ?? "cash",
         rawPayload: paymentPayload,
         status: "paid",
         deviceId: deviceId ?? null,
+        amountPaid: paid,
+        requiredAmount,
       });
 
       tx.update(bookingRef, {
@@ -460,6 +458,17 @@ app.post("/api/confirmPayment", async (req, res) => {
         holdExpiresAt: null,
         activeAt: admin.firestore.FieldValue.serverTimestamp(),
         endAt,
+        paymentConfirmed: true,
+        paymentStatus: "paid",
+        userControlEnabled: true,
+        adminOverride: false,
+        paymentProvider: provider ?? "cash",
+        paymentPayload,
+        deviceStatus: {
+          fan: false,
+          uvc: false,
+          lock: false,
+        },
       });
 
       tx.update(lockerRef, {
@@ -467,6 +476,8 @@ app.post("/api/confirmPayment", async (req, res) => {
         pendingPayment: false,
         pendingPaymentExpiresAt: null,
         lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
+        currentBookingId: bookingId,
+        occupied: false,
       });
 
       tx.set(db.collection("deviceCommands").doc(), {
@@ -477,7 +488,14 @@ app.post("/api/confirmPayment", async (req, res) => {
         payload: { durationMs: UNLOCK_MS, reason: "payment_confirmed", bookingId },
       });
 
-      return { ok: true as const, bookingId, unlockMs: UNLOCK_MS, endsAt: endAt.toMillis() };
+      return {
+        ok: true as const,
+        bookingId,
+        unlockMs: UNLOCK_MS,
+        endsAt: endAt.toMillis(),
+        requiredAmount,
+        amountPaid: paid,
+      };
     });
 
     if (!result.ok) return res.status(400).json(result);
@@ -488,67 +506,11 @@ app.post("/api/confirmPayment", async (req, res) => {
       bookingId: (result as any).bookingId,
       unlockMs: (result as any).unlockMs,
       endsAt: (result as any).endsAt,
+      requiredAmount: (result as any).requiredAmount,
+      amountPaid: (result as any).amountPaid,
     });
   } catch (err: any) {
     console.error("confirmPayment error", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
-  }
-});
-
-app.post("/api/complete", async (req, res) => {
-  const auth = requireDeviceKey(req);
-  if (!auth.ok) {
-    return res.status(auth.status).json({ ok: false, error: auth.error });
-  }
-
-  const { lockerId, deviceId, success } = req.body as {
-    lockerId?: string;
-    deviceId?: string;
-    success?: boolean;
-  };
-
-  if (!lockerId) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
-
-  const lockerRef = db.doc(`lockers/${lockerId}`);
-
-  try {
-    const result = await db.runTransaction(async (tx) => {
-      const lSnap = await tx.get(lockerRef);
-      if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
-
-      const locker = lSnap.data() as any;
-      const bookingId = locker.currentBookingId as string | undefined;
-      if (!bookingId) return { ok: false as const, error: "NO_ACTIVE_BOOKING" };
-
-      const bookingRef = db.doc(`bookings/${bookingId}`);
-      const bSnap = await tx.get(bookingRef);
-      if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
-
-      tx.update(bookingRef, {
-        status: "completed",
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        completedByDeviceId: deviceId ?? null,
-        disinfectionOk: success ?? true,
-      });
-
-      tx.update(lockerRef, {
-        status: "available",
-        occupied: false,
-        currentBookingId: null,
-        reservedByUserId: null,
-        pendingPayment: false,
-        reservationExpiresAt: null,
-        pendingPaymentExpiresAt: null,
-        lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { ok: true as const, bookingId };
-    });
-
-    if (!result.ok) return res.status(400).json(result);
-    return res.json({ ok: true, bookingId: (result as any).bookingId });
-  } catch (err: any) {
-    console.error("complete error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -614,6 +576,11 @@ app.post("/api/user/startProgram", async (req, res) => {
         selectedModes: ordered,
         sequenceName: sequenceName ?? "custom",
         sanitationRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        deviceStatus: {
+          fan: ordered.includes("dryer"),
+          uvc: ordered.includes("uvc"),
+          lock: false,
+        },
       });
 
       return { ok: true as const, lockerId, steps };
@@ -701,9 +668,64 @@ app.post("/api/user/complete", async (req, res) => {
   }
 });
 
-// =========================
-// Server start
-// =========================
+app.post("/api/complete", async (req, res) => {
+  const auth = requireDeviceKey(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  const { lockerId, deviceId, success } = req.body as {
+    lockerId?: string;
+    deviceId?: string;
+    success?: boolean;
+  };
+
+  if (!lockerId) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+  const lockerRef = db.doc(`lockers/${lockerId}`);
+
+  try {
+    const result = await db.runTransaction(async (tx) => {
+      const lSnap = await tx.get(lockerRef);
+      if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
+
+      const locker = lSnap.data() as any;
+      const bookingId = locker.currentBookingId as string | undefined;
+      if (!bookingId) return { ok: false as const, error: "NO_ACTIVE_BOOKING" };
+
+      const bookingRef = db.doc(`bookings/${bookingId}`);
+      const bSnap = await tx.get(bookingRef);
+      if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+
+      tx.update(bookingRef, {
+        status: "completed",
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        completedByDeviceId: deviceId ?? null,
+        disinfectionOk: success ?? true,
+      });
+
+      tx.update(lockerRef, {
+        status: "available",
+        occupied: false,
+        currentBookingId: null,
+        reservedByUserId: null,
+        pendingPayment: false,
+        reservationExpiresAt: null,
+        pendingPaymentExpiresAt: null,
+        lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { ok: true as const, bookingId };
+    });
+
+    if (!result.ok) return res.status(400).json(result);
+    return res.json({ ok: true, bookingId: (result as any).bookingId });
+  } catch (err: any) {
+    console.error("complete error", err);
+    return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
+  }
+});
+
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, "0.0.0.0", () => {

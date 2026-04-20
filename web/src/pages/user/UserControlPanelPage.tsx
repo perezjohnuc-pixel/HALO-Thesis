@@ -13,16 +13,8 @@ type BookingDoc = {
   paymentStatus?: string;
   userControlEnabled?: boolean;
   adminOverride?: boolean;
-  permissions?: {
-    fan?: boolean;
-    uvc?: boolean;
-    spray?: boolean;
-  };
-  deviceStatus?: {
-    fan?: boolean;
-    uvc?: boolean;
-    spray?: boolean;
-  };
+  serviceType?: string;
+  amount?: number;
   selectedModes?: string[];
   sequenceName?: string;
 };
@@ -66,6 +58,13 @@ const PRESETS: Preset[] = [
   },
 ];
 
+function getServiceLabel(serviceType?: string | null) {
+  if (serviceType === "locker_only") return "Locker Only";
+  if (serviceType === "disinfectant") return "Disinfectant";
+  if (serviceType === "combined") return "Combined";
+  return "Locker Service";
+}
+
 export default function UserControlPanelPage() {
   const { bookingId } = useParams();
   const navigate = useNavigate();
@@ -74,7 +73,6 @@ export default function UserControlPanelPage() {
   const [loading, setLoading] = useState(true);
   const [busyPreset, setBusyPreset] = useState<string | null>(null);
   const [busyComplete, setBusyComplete] = useState(false);
-  const [lastStartedPreset, setLastStartedPreset] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
@@ -123,7 +121,6 @@ export default function UserControlPanelPage() {
 
   const activePresetLabel = useMemo(() => {
     if (!booking?.sequenceName) return null;
-
     const matched = PRESETS.find((p) => p.sequenceName === booking.sequenceName);
     return matched?.title ?? booking.sequenceName;
   }, [booking]);
@@ -143,7 +140,6 @@ export default function UserControlPanelPage() {
         sequenceName: preset.sequenceName,
       });
 
-      setLastStartedPreset(preset.title);
       setOkMsg(`${preset.title} started successfully.`);
     } catch (e: any) {
       setErr(e.message ?? String(e));
@@ -204,6 +200,9 @@ export default function UserControlPanelPage() {
     );
   }
 
+  const serviceLabel = getServiceLabel(booking.serviceType);
+  const amount = typeof booking.amount === "number" ? booking.amount : 25;
+
   return (
     <div className="space-y-4">
       <Card>
@@ -226,7 +225,7 @@ export default function UserControlPanelPage() {
           {err && <div className="mb-4 text-sm text-red-300">{err}</div>}
           {okMsg && <div className="mb-4 text-sm text-emerald-300">{okMsg}</div>}
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
               <div className="text-sm text-slate-400">Booking ID</div>
               <div className="break-all font-mono text-xs">{booking.id}</div>
@@ -236,13 +235,23 @@ export default function UserControlPanelPage() {
               <div className="text-sm text-slate-400">Locker</div>
               <div className="font-semibold">{booking.lockerId ?? "—"}</div>
             </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Service</div>
+              <div className="font-semibold">{serviceLabel}</div>
+            </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Amount Paid</div>
+              <div className="font-semibold">₱{amount}</div>
+            </div>
           </div>
 
           <div className="mt-6 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <div>
               <div className="font-semibold">Access status</div>
               <div className="mt-1 text-sm text-slate-400">
-                Payment must be confirmed and user controls must be enabled by admin.
+                Payment must be confirmed and user controls must be enabled by backend/admin.
               </div>
             </div>
 
@@ -254,7 +263,7 @@ export default function UserControlPanelPage() {
 
             {paymentConfirmed && booking.userControlEnabled !== true && (
               <div className="rounded-xl border border-blue-500/40 bg-blue-500/10 p-3 text-sm text-blue-200">
-                Payment confirmed. Waiting for admin to enable user controls.
+                Payment confirmed. Waiting for user control to be enabled.
               </div>
             )}
 

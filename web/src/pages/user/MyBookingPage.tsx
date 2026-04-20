@@ -26,7 +26,7 @@ function toMs(ts: any): number | null {
   return null;
 }
 
-const DEFAULT_PAYMENT_AMOUNT_PHP = 25;;
+const DEFAULT_PAYMENT_AMOUNT_PHP = 25;
 
 function stepIndexFor(status?: string | null) {
   if (status === "reserved") return 0;
@@ -89,7 +89,6 @@ export default function MyBookingPage() {
     });
   }, [booking?.lockerId]);
 
-  // AUTO REDIRECT TO CONTROL PANEL AFTER ADMIN CONFIRMS PAYMENT
   useEffect(() => {
     if (!booking?.id) return;
 
@@ -97,20 +96,11 @@ export default function MyBookingPage() {
       (booking as any)?.paymentConfirmed === true ||
       (booking as any)?.paymentStatus === "paid";
 
-    const userControlEnabled =
-      (booking as any)?.userControlEnabled === true;
+    const userControlEnabled = (booking as any)?.userControlEnabled === true;
 
-    // strict mode: admin must explicitly allow user control
     if (booking.status === "active" && paymentConfirmed && userControlEnabled) {
       navigate(`/app/control/${booking.id}`);
     }
-
-    // demo fallback:
-    // if you want auto-redirect as soon as booking becomes active,
-    // even if userControlEnabled is not yet written:
-    // if (booking.status === "active" && paymentConfirmed) {
-    //   navigate(`/app/control/${booking.id}`);
-    // }
   }, [booking, navigate]);
 
   const holdMs = useMemo(() => toMs((booking as any)?.holdExpiresAt), [booking]);
@@ -187,24 +177,22 @@ export default function MyBookingPage() {
     );
   }
 
-    const isTerminal =
-      booking.status === "completed" ||
-      booking.status === "cancelled" ||
-      booking.status === "expired" ||
-      booking.status === "failed";
+  const isTerminal =
+    booking.status === "completed" ||
+    booking.status === "cancelled" ||
+    booking.status === "expired" ||
+    booking.status === "failed";
 
-    const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
-    const stepIdx = stepIndexFor(booking.status);
-    const amount =
-      typeof (booking as any)?.amount === "number"
-        ? (booking as any).amount
-        : DEFAULT_PAYMENT_AMOUNT_PHP;
-
-    const serviceType = (booking as any)?.serviceType ?? "locker_only";
-    const serviceLabel = getServiceLabel(serviceType);
-    const coinGuide = getCoinGuide(amount);
-
-    const refCode = booking?.id ? booking.id.slice(0, 10) : "";
+  const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
+  const stepIdx = stepIndexFor(booking.status);
+  const amount =
+    typeof (booking as any)?.amount === "number"
+      ? (booking as any).amount
+      : DEFAULT_PAYMENT_AMOUNT_PHP;
+  const serviceType = (booking as any)?.serviceType ?? "locker_only";
+  const serviceLabel = getServiceLabel(serviceType);
+  const coinGuide = getCoinGuide(amount);
+  const refCode = booking?.id ? booking.id.slice(0, 10) : "";
 
   return (
     <div className="space-y-4">
@@ -224,7 +212,7 @@ export default function MyBookingPage() {
             <div className="flex items-center">
               {[
                 { title: "Reserve", desc: "Locker selected" },
-                { title: "Insert Coins", desc: `₱${amount} required` },                
+                { title: "Insert Coins", desc: `₱${amount} required` },
                 { title: "In Use", desc: "Locker secured" },
                 { title: "Retrieve", desc: "Scan personal QR" },
               ].map((s, i) => {
@@ -315,7 +303,7 @@ export default function MyBookingPage() {
               <div className="flex flex-wrap gap-2">
                 <Badge color="amber">Amount due: ₱{amount}</Badge>
                 <Badge color="blue">{coinGuide}</Badge>
-                <Badge color="cyan">{serviceLabel}</Badge>
+                <Badge color="sky">{serviceLabel}</Badge>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
@@ -343,64 +331,64 @@ export default function MyBookingPage() {
           )}
 
           {booking.status === "active" && (
-              <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                <div>
-                  <div className="font-semibold">Locker in use</div>
-                  <div className="text-sm text-slate-400">
-                    Your payment has been confirmed and the locker is assigned to you.
-                  </div>
+            <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div>
+                <div className="font-semibold">Locker in use</div>
+                <div className="text-sm text-slate-400">
+                  Your payment has been confirmed and the locker is assigned to you.
                 </div>
-
-                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                  <div className="font-semibold">Next step</div>
-                  <div className="mt-1 text-slate-300">
-                    Continue to the locker control page to choose your cleaning mode:
-                    <b> Recommended Preset</b>, <b>Disinfect</b>, <b>Fan</b>, or <b>UV-C</b>.
-                  </div>
-
-                  <div className="mt-3">
-                    <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
-                      Next
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                  <div className="font-semibold">Important</div>
-                  <div className="mt-1 text-slate-300">
-                    Keep your personal retrieval QR. You will use it later to reopen your locker.
-                  </div>
-                </div>
-
-                {retrievalQrPayload && (
-                  <div className="grid items-start gap-4 md:grid-cols-2">
-                    <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
-                      <QRCode value={retrievalQrPayload} size={180} />
-                    </div>
-
-                    <div>
-                      <div className="font-semibold">Personal retrieval QR</div>
-                      <div className="text-sm text-slate-400">
-                        Present this QR when you return. The ESP32-CAM will scan it, and the backend
-                        will verify that it belongs to your active booking and locker.
-                      </div>
-
-                      <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
-
-                      <div className="mt-3 flex flex-col gap-2 md:flex-row">
-                        <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
-                          Next
-                        </Button>
-
-                        <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
-                          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy payload"}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
-            )}
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
+                <div className="font-semibold">Next step</div>
+                <div className="mt-1 text-slate-300">
+                  Continue to the locker control page to choose your cleaning mode:
+                  <b> Recommended Preset</b>, <b>Disinfect</b>, <b>Fan</b>, or <b>UV-C</b>.
+                </div>
+
+                <div className="mt-3">
+                  <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
+                    Next
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
+                <div className="font-semibold">Important</div>
+                <div className="mt-1 text-slate-300">
+                  Keep your personal retrieval QR. You will use it later to reopen your locker.
+                </div>
+              </div>
+
+              {retrievalQrPayload && (
+                <div className="grid items-start gap-4 md:grid-cols-2">
+                  <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
+                    <QRCode value={retrievalQrPayload} size={180} />
+                  </div>
+
+                  <div>
+                    <div className="font-semibold">Personal retrieval QR</div>
+                    <div className="text-sm text-slate-400">
+                      Present this QR when you return. The ESP32-CAM will scan it, and the backend
+                      will verify that it belongs to your active booking and locker.
+                    </div>
+
+                    <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
+
+                    <div className="mt-3 flex flex-col gap-2 md:flex-row">
+                      <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
+                        Next
+                      </Button>
+
+                      <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
+                        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy payload"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {isTerminal && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
