@@ -119,6 +119,24 @@ export default function UserControlPanelPage() {
     );
   }, [booking, paymentConfirmed]);
 
+  const availablePresets = useMemo(() => {
+    const serviceType = booking?.serviceType;
+
+    if (serviceType === "disinfectant") {
+      return PRESETS.filter((p) => p.id === "disinfect");
+    }
+
+    if (serviceType === "combined") {
+      return PRESETS;
+    }
+
+    if (serviceType === "locker_only") {
+      return [];
+    }
+
+    return PRESETS;
+  }, [booking]);
+
   const activePresetLabel = useMemo(() => {
     if (!booking?.sequenceName) return null;
     const matched = PRESETS.find((p) => p.sequenceName === booking.sequenceName);
@@ -288,31 +306,39 @@ export default function UserControlPanelPage() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {PRESETS.map((preset) => (
-                <div
-                  key={preset.id}
-                  className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4"
-                >
-                  <div className="font-semibold">{preset.title}</div>
-                  <div className="mt-1 text-sm text-slate-400">{preset.subtitle}</div>
+            {booking?.serviceType === "locker_only" && (
+              <div className="mt-3 rounded-xl border border-slate-700 bg-slate-900/40 p-3 text-sm text-slate-300">
+                This booking is for <b>Locker Only</b>. No cleaning preset is available for this session.
+              </div>
+            )}
 
-                  <div className="mt-3 text-xs text-slate-500">
-                    Sequence: {preset.selectedModes.join(" → ")}
-                  </div>
+            {availablePresets.length > 0 && (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {availablePresets.map((preset) => (
+                  <div
+                    key={preset.id}
+                    className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4"
+                  >
+                    <div className="font-semibold">{preset.title}</div>
+                    <div className="mt-1 text-sm text-slate-400">{preset.subtitle}</div>
 
-                  <div className="mt-4">
-                    <Button
-                      className="w-full"
-                      disabled={!canUseControls || busyPreset !== null}
-                      onClick={() => startPreset(preset)}
-                    >
-                      {busyPreset === preset.id ? "Starting..." : `Start ${preset.title}`}
-                    </Button>
+                    <div className="mt-3 text-xs text-slate-500">
+                      Sequence: {preset.selectedModes.join(" → ")}
+                    </div>
+
+                    <div className="mt-4">
+                      <Button
+                        className="w-full"
+                        disabled={!canUseControls || busyPreset !== null}
+                        onClick={() => startPreset(preset)}
+                      >
+                        {busyPreset === preset.id ? "Starting..." : `Start ${preset.title}`}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
