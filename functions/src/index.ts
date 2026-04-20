@@ -142,11 +142,13 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       fan: false,
       uvc: false,
       lock: false,
+      mist: false,
     };
 
     if (currentBookingId) {
       const bookingRef = db.doc(`bookings/${currentBookingId}`);
       const bookingSnap = await bookingRef.get();
+
       if (bookingSnap.exists) {
         const booking = bookingSnap.data() as any;
         bookingStatus = booking.status ?? null;
@@ -156,6 +158,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
           fan: !!booking?.deviceStatus?.fan,
           uvc: !!booking?.deviceStatus?.uvc,
           lock: !!booking?.deviceStatus?.lock,
+          mist: !!booking?.deviceStatus?.mist,
         };
       }
     }
@@ -424,6 +427,7 @@ app.post("/api/confirmPayment", async (req, res) => {
 
       const requiredAmount = Number(booking.amount ?? 25);
       const paid = Number(amountPaid ?? 0);
+
       if (!Number.isFinite(paid) || paid < requiredAmount) {
         return {
           ok: false as const,
@@ -468,6 +472,7 @@ app.post("/api/confirmPayment", async (req, res) => {
           fan: false,
           uvc: false,
           lock: false,
+          mist: false,
         },
       });
 
@@ -532,8 +537,8 @@ app.post("/api/user/startProgram", async (req, res) => {
   const chosen = Array.isArray(selectedModes) ? selectedModes.map((s) => String(s)) : [];
   const allowed = new Set(PROGRAM_ORDER);
   const unique = Array.from(new Set(chosen.filter((m) => allowed.has(m as any))));
-  const ordered = PROGRAM_ORDER.filter((m) => unique.includes(m));
-  if (ordered.length === 0) return res.status(400).json({ ok: false, error: "NO_VALID_MODES" });
+  let ordered = PROGRAM_ORDER.filter((m) => unique.includes(m));
+  let finalSequenceName = sequenceName ?? "custom";
 
   const bookingRef = db.doc(`bookings/${bookingId}`);
 
@@ -548,6 +553,21 @@ app.post("/api/user/startProgram", async (req, res) => {
 
       const lockerId = booking.lockerId as string | undefined;
       if (!lockerId) return { ok: false as const, error: "INVALID_BOOKING" };
+
+      const serviceType = booking.serviceType ?? "locker_only";
+
+      if (serviceType === "locker_only") {
+        return { ok: false as const, error: "NO_CLEANING_ALLOWED_FOR_LOCKER_ONLY" };
+      }
+
+      if (serviceType === "disinfectant") {
+        ordered = ["mist", "uvc"];
+        finalSequenceName = "disinfect";
+      }
+
+      if (ordered.length === 0) {
+        return { ok: false as const, error: "NO_VALID_MODES" };
+      }
 
       const cmdRef = db.collection("deviceCommands").doc(`program_${bookingId}`);
       const steps = ordered.map((id, idx) => ({
@@ -565,7 +585,7 @@ app.post("/api/user/startProgram", async (req, res) => {
           status: "queued",
           payload: {
             bookingId,
-            sequenceName: sequenceName ?? "custom",
+            sequenceName: finalSequenceName,
             steps,
           },
         },
@@ -574,12 +594,13 @@ app.post("/api/user/startProgram", async (req, res) => {
 
       tx.update(bookingRef, {
         selectedModes: ordered,
-        sequenceName: sequenceName ?? "custom",
+        sequenceName: finalSequenceName,
         sanitationRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
         deviceStatus: {
           fan: ordered.includes("dryer"),
           uvc: ordered.includes("uvc"),
           lock: false,
+          mist: ordered.includes("mist"),
         },
       });
 
@@ -632,6 +653,12 @@ app.post("/api/user/complete", async (req, res) => {
         completedByUserId: auth.uid,
         selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
         sequenceName: sequenceName ?? "custom",
+        deviceStatus: {
+          fan: false,
+          uvc: false,
+          lock: false,
+          mist: false,
+        },
       });
 
       tx.set(
@@ -702,6 +729,12 @@ app.post("/api/complete", async (req, res) => {
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         completedByDeviceId: deviceId ?? null,
         disinfectionOk: success ?? true,
+        deviceStatus: {
+          fan: false,
+          uvc: false,
+          lock: false,
+          mist: false,
+        },
       });
 
       tx.update(lockerRef, {
