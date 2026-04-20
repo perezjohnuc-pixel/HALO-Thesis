@@ -36,6 +36,18 @@ function stepIndexFor(status?: string | null) {
   return 0;
 }
 
+function getServiceLabel(serviceType?: string | null) {
+  if (serviceType === "locker_only") return "Locker Only";
+  if (serviceType === "disinfectant") return "Disinfectant";
+  if (serviceType === "combined") return "Combined";
+  return "Locker Service";
+}
+
+function getCoinGuide(amount: number) {
+  if (amount === 30) return "Insert six 5-peso coins";
+  return "Insert five 5-peso coins";
+}
+
 export default function MyBookingPage() {
   const { user } = useAuth();
   const uid = user?.uid ?? "";
@@ -175,16 +187,24 @@ export default function MyBookingPage() {
     );
   }
 
-  const isTerminal =
-    booking.status === "completed" ||
-    booking.status === "cancelled" ||
-    booking.status === "expired" ||
-    booking.status === "failed";
+    const isTerminal =
+      booking.status === "completed" ||
+      booking.status === "cancelled" ||
+      booking.status === "expired" ||
+      booking.status === "failed";
 
-  const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
-  const stepIdx = stepIndexFor(booking.status);
-  const amount = typeof (booking as any)?.amount === "number" ? (booking as any).amount : DEFAULT_PAYMENT_AMOUNT_PHP;
-  const refCode = booking?.id ? booking.id.slice(0, 10) : "";
+    const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
+    const stepIdx = stepIndexFor(booking.status);
+    const amount =
+      typeof (booking as any)?.amount === "number"
+        ? (booking as any).amount
+        : DEFAULT_PAYMENT_AMOUNT_PHP;
+
+    const serviceType = (booking as any)?.serviceType ?? "locker_only";
+    const serviceLabel = getServiceLabel(serviceType);
+    const coinGuide = getCoinGuide(amount);
+
+    const refCode = booking?.id ? booking.id.slice(0, 10) : "";
 
   return (
     <div className="space-y-4">
@@ -204,7 +224,7 @@ export default function MyBookingPage() {
             <div className="flex items-center">
               {[
                 { title: "Reserve", desc: "Locker selected" },
-                { title: "Insert Coins", desc: "₱25 required" },
+                { title: "Insert Coins", desc: `₱${amount} required` },                
                 { title: "In Use", desc: "Locker secured" },
                 { title: "Retrieve", desc: "Scan personal QR" },
               ].map((s, i) => {
@@ -252,12 +272,19 @@ export default function MyBookingPage() {
         <CardBody>
           {err && <div className="mb-3 text-sm text-red-300">{err}</div>}
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <div>
               <div className="text-sm text-slate-400">Locker</div>
               <div className="font-semibold">{locker?.name ?? booking.lockerId}</div>
               <div className="text-xs text-slate-500">Location: {locker?.location ?? "—"}</div>
             </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Selected service</div>
+              <div className="font-semibold">{serviceLabel}</div>
+              <div className="text-xs text-slate-500">Amount due: ₱{amount}</div>
+            </div>
+
             <div>
               <div className="text-sm text-slate-400">Booking ID</div>
               <div className="break-all font-mono text-xs">{booking.id}</div>
@@ -287,14 +314,15 @@ export default function MyBookingPage() {
 
               <div className="flex flex-wrap gap-2">
                 <Badge color="amber">Amount due: ₱{amount}</Badge>
-                <Badge color="blue">Insert five 5-peso coins</Badge>
+                <Badge color="blue">{coinGuide}</Badge>
+                <Badge color="cyan">{serviceLabel}</Badge>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
                 <div className="font-semibold">Instructions</div>
                 <div className="mt-1 text-slate-300">
-                  Insert coins into the locker coin slot. Once the total reaches <b>₱25</b>, the ESP32
-                  will notify the backend and the locker will unlock automatically.
+                  Insert coins into the locker coin slot. Once the total reaches <b>₱{amount}</b>, the ESP32
+                  will notify the backend and the locker will proceed to the next stage.
                 </div>
 
                 <div className="mt-3 text-xs text-slate-400">Reference code</div>
