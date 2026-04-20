@@ -17,9 +17,42 @@ import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import StatusPill from "../../components/StatusPill";
 import { useNavigate } from "react-router-dom";
 
-// Temporary thesis flow
-const DEFAULT_AMOUNT = 25; // PHP
-const FIXED_DURATION_MIN = 3; // after payment / demo session
+const FIXED_DURATION_MIN = 3;
+
+type ServiceType = "locker_only" | "disinfectant" | "combined";
+
+const SERVICE_OPTIONS: Record<
+  ServiceType,
+  {
+    label: string;
+    amount: number;
+    description: string;
+    selectedModes: string[];
+    sequenceName: string;
+  }
+> = {
+  locker_only: {
+    label: "Locker Only",
+    amount: 25,
+    description: "Use the locker only.",
+    selectedModes: [],
+    sequenceName: "locker_only",
+  },
+  disinfectant: {
+    label: "Disinfectant",
+    amount: 25,
+    description: "Disinfection service only.",
+    selectedModes: ["mist"],
+    sequenceName: "disinfectant",
+  },
+  combined: {
+    label: "Combined",
+    amount: 30,
+    description: "Locker use with full cleaning process.",
+    selectedModes: ["mist", "dryer", "uvc"],
+    sequenceName: "combined",
+  },
+};
 
 export default function LockersPage() {
   const { user } = useAuth();
@@ -28,6 +61,7 @@ export default function LockersPage() {
   const [lockers, setLockers] = useState<Array<{ id: string; data: Locker }>>([]);
   const [busy, setBusy] = useState(false);
   const [myBooking, setMyBooking] = useState<{ id: string; data: Booking } | null>(null);
+  const [selectedService, setSelectedService] = useState<ServiceType>("locker_only");
 
   useEffect(() => {
     const q = query(collection(db, "lockers"));
@@ -55,6 +89,8 @@ export default function LockersPage() {
     return [...lockers].sort((a, b) => (a.data.name ?? a.id).localeCompare(b.data.name ?? b.id));
   }, [lockers]);
 
+  const selectedConfig = SERVICE_OPTIONS[selectedService];
+
   async function reserve(lockerId: string) {
     if (!user) return;
 
@@ -77,18 +113,18 @@ export default function LockersPage() {
         lockerId,
         status: "pending_payment",
         durationMin: FIXED_DURATION_MIN,
-        amount: DEFAULT_AMOUNT,
+        amount: selectedConfig.amount,
         paymentMethod: "cash",
+        serviceType: selectedService,
+        selectedModes: selectedConfig.selectedModes,
+        sequenceName: selectedConfig.sequenceName,
         createdAt: serverTimestamp(),
         startAt: serverTimestamp(),
         paymentRequestedAt: serverTimestamp(),
         holdExpiresAt: paymentDeadline,
-
-        // retrieval/security QR will be used later
         claimQrToken: bookingId,
       } as any);
 
-      // temporary flow: immediately prepare locker for device-side coin payment
       await setDoc(
         doc(db, "lockers", lockerId),
         {
@@ -118,8 +154,7 @@ export default function LockersPage() {
             <div>
               <div className="text-lg font-semibold">Reserve a locker</div>
               <div className="text-sm text-slate-400">
-                Choose an available locker, then proceed to <b>cash coin payment</b>.
-                After payment is confirmed by the ESP32, the locker will unlock.
+                Choose an available locker, select a service, then proceed to <b>cash coin payment</b>.
               </div>
             </div>
 
@@ -132,15 +167,53 @@ export default function LockersPage() {
         </CardHeader>
 
         <CardBody>
-          <div className="space-y-2 text-sm text-slate-300">
+          <div className="space-y-4">
             <div>
-              Payment method: <b>Cash (coins) only</b>
+              <div className="mb-2 text-sm font-medium text-slate-200">Choose service type</div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                {(Object.entries(SERVICE_OPTIONS) as Array<[ServiceType, (typeof SERVICE_OPTIONS)[ServiceType]]>).map(
+                  ([key, option]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedService(key)}
+                      className={`rounded-xl border p-4 text-left transition ${
+                        selectedService === key
+                          ? "border-cyan-400 bg-cyan-500/10"
+                          : "border-slate-800 bg-slate-950/40 hover:border-slate-700"
+                      }`}
+                    >
+                      <div className="font-semibold text-slate-100">{option.label}</div>
+                      <div className="mt-1 text-sm text-slate-400">{option.description}</div>
+                      <div className="mt-3 text-sm font-semibold text-slate-200">₱{option.amount}</div>
+                    </button>
+                  )
+                )}
+              </div>
             </div>
-            <div>
-              Required amount: <b>₱{DEFAULT_AMOUNT}</b>
-            </div>
-            <div>
-              Retrieval security: your <b>personal QR code</b> will be used later when reclaiming the locker.
+
+            <div className="space-y-2 text-sm text-slate-300">
+              <div>
+                Selected service: <b>{selectedConfig.label}</b>
+              </div>
+              <div>
+                Payment method: <b>Cash (coins) only</b>
+              </div>
+              <div>
+                Required amount: <b>₱{selectedConfig.amount}</b>
+              </div>
+              <div>
+                Coin guide:{" "}
+                <b>
+                  {selectedConfig.amount === 25
+                    ? "Insert five 5-peso coins"
+                    : "Insert six 5-peso coins"}
+                </b>
+              </div>
+              <div>
+                Retrieval security: your <b>personal QR code</b> will be used later when reclaiming the locker.
+              </div>
             </div>
           </div>
         </CardBody>
