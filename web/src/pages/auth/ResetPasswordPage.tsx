@@ -1,23 +1,25 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button, Input, Label } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 
-export default function LoginPage() {
-  const { signIn } = useAuth();
+export default function ResetPasswordPage() {
+  const { resetPassword } = useAuth();
+
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const nav = useNavigate();
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setMessage(null);
     setBusy(true);
+
     try {
-      await signIn(email, password);
-      nav("/");
+      await resetPassword(email);
+      setMessage("Password reset email sent. Please check your inbox.");
     } catch (err: any) {
       setError(err?.message ?? String(err));
     } finally {
@@ -28,6 +30,13 @@ export default function LoginPage() {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
+        <div className="text-lg font-semibold">Reset password</div>
+        <div className="text-sm text-slate-400">
+          Enter your email address and we will send a password reset link.
+        </div>
+      </div>
+
+      <div>
         <Label>Email</Label>
         <Input
           value={email}
@@ -37,35 +46,17 @@ export default function LoginPage() {
         />
       </div>
 
-      <div>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <Label>Password</Label>
-          <Link
-            className="text-xs text-slate-100 underline"
-            to="/auth/reset-password"
-          >
-            Forgot password?
-          </Link>
-        </div>
-
-        <Input
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          type="password"
-          required
-        />
-      </div>
-
       {error && <div className="text-sm text-red-300">{error}</div>}
+      {message && <div className="text-sm text-emerald-300">{message}</div>}
 
       <Button disabled={busy} className="w-full">
-        {busy ? "Signing in..." : "Sign in"}
+        {busy ? "Sending..." : "Send reset email"}
       </Button>
 
       <div className="text-sm text-slate-400">
-        No account?{" "}
-        <Link className="text-slate-100 underline" to="/auth/register">
-          Create one
+        Remembered your password?{" "}
+        <Link className="text-slate-100 underline" to="/auth/login">
+          Back to login
         </Link>
       </div>
     </form>

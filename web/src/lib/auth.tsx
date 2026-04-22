@@ -99,9 +99,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (displayName?.trim()) {
           await updateProfile(cred.user, { displayName: displayName.trim() });
         }
-
-        // Do not create /users doc here.
-        // onAuthStateChanged will create it once, safely.
       },
       async resetPassword(email) {
         await sendPasswordResetEmail(auth, email.trim());

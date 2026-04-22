@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
+import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 import AuthPage from "./pages/auth/AuthPage";
 import Layout from "./components/Layout";
 import UserHome from "./pages/user/UserHome";
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/auth" element={<AuthPage />}>
           <Route path="login" element={<LoginPage />} />
           <Route path="register" element={<RegisterPage />} />
+          <Route path="reset-password" element={<ResetPasswordPage />} />
           <Route index element={<Navigate to="/auth/login" replace />} />
         </Route>
 
