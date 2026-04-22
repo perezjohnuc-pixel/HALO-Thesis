@@ -3,6 +3,7 @@ import {
   User,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as fbSignOut,
   updateProfile,
@@ -17,6 +18,7 @@ type AuthCtx = {
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -100,6 +102,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Do not create /users doc here.
         // onAuthStateChanged will create it once, safely.
+      },
+      async resetPassword(email) {
+        await sendPasswordResetEmail(auth, email.trim());
       },
       async signOut() {
         await fbSignOut(auth);
