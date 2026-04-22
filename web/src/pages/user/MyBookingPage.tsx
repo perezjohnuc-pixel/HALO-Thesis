@@ -187,7 +187,7 @@ export default function MyBookingPage() {
   const stepIdx = stepIndexFor(booking.status);
   const amount =
     typeof (booking as any)?.amount === "number"
-      ? (booking as any).amount
+      ? (booking as any)?.amount
       : DEFAULT_PAYMENT_AMOUNT_PHP;
   const serviceType = (booking as any)?.serviceType ?? "locker_only";
   const serviceLabel = getServiceLabel(serviceType);
