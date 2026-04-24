@@ -18,14 +18,12 @@ type BookingDoc = {
   amount?: number;
   selectedModes?: string[];
   sequenceName?: string;
-
   helmetDetected?: boolean;
   programStarted?: boolean;
   programFinished?: boolean;
   programStep?: string;
   programStepEndsAt?: any;
   retrievalQrVerified?: boolean;
-
   deviceStatus?: {
     lock?: boolean;
     mist?: boolean;
@@ -179,7 +177,7 @@ export default function UserControlPanelPage() {
     if (!bookingId || !booking) return;
     if (!canUseControls) return;
 
-    if (booking.serviceType !== "locker_only" && booking.helmetDetected !== true) {
+    if (booking.helmetDetected !== true) {
       setErr("Helmet is not detected yet. Place the helmet inside the locker first.");
       return;
     }
@@ -284,7 +282,7 @@ export default function UserControlPanelPage() {
             <div>
               <div className="text-lg font-bold">Locker Control Panel</div>
               <div className="text-sm text-slate-400">
-                Start the locker or cleaning process, then retrieve using your QR code.
+                Start the session, scan QR for retrieval, then open and complete the booking.
               </div>
             </div>
 
@@ -365,9 +363,9 @@ export default function UserControlPanelPage() {
               </div>
             </div>
 
-            {booking.serviceType !== "locker_only" && !booking.helmetDetected && (
+            {!booking.helmetDetected && (
               <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
-                Helmet is not detected yet. Insert the helmet before starting the disinfecting process.
+                Helmet is not detected yet. Insert the helmet before starting.
               </div>
             )}
 
