@@ -17,8 +17,6 @@ import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import StatusPill from "../../components/StatusPill";
 import { useNavigate } from "react-router-dom";
 
-const FIXED_DURATION_MIN = 3;
-
 type ServiceType = "locker_only" | "disinfectant" | "combined";
 
 const SERVICE_OPTIONS: Record<
@@ -26,6 +24,7 @@ const SERVICE_OPTIONS: Record<
   {
     label: string;
     amount: number;
+    durationMin: number;
     description: string;
     selectedModes: string[];
     sequenceName: string;
@@ -34,21 +33,24 @@ const SERVICE_OPTIONS: Record<
   locker_only: {
     label: "Locker Only",
     amount: 25,
-    description: "Use the locker only.",
+    durationMin: 300,
+    description: "Use the locker for helmet storage only.",
     selectedModes: [],
     sequenceName: "locker_only",
   },
   disinfectant: {
-    label: "Disinfectant",
+    label: "Disinfectant Only",
     amount: 25,
-    description: "Disinfection service only.",
-    selectedModes: ["mist"],
+    durationMin: 30,
+    description: "Run the fixed cleaning sequence: mist, fan, then UV-C.",
+    selectedModes: ["mist", "dryer", "uvc"],
     sequenceName: "disinfectant",
   },
   combined: {
     label: "Combined",
     amount: 30,
-    description: "Locker use with full cleaning process.",
+    durationMin: 300,
+    description: "Locker storage plus full cleaning sequence.",
     selectedModes: ["mist", "dryer", "uvc"],
     sequenceName: "combined",
   },
@@ -72,6 +74,7 @@ export default function LockersPage() {
 
   useEffect(() => {
     if (!user) return;
+
     const q = query(
       collection(db, "bookings"),
       where("userId", "==", user.uid),
@@ -101,6 +104,7 @@ export default function LockersPage() {
     }
 
     setBusy(true);
+
     try {
       const now = Date.now();
       const paymentDeadline = Timestamp.fromMillis(now + 3 * 60 * 1000);
@@ -112,12 +116,34 @@ export default function LockersPage() {
         userId: user.uid,
         lockerId,
         status: "pending_payment",
-        durationMin: FIXED_DURATION_MIN,
-        amount: selectedConfig.amount,
-        paymentMethod: "cash",
+
         serviceType: selectedService,
+        amount: selectedConfig.amount,
+        durationMin: selectedConfig.durationMin,
         selectedModes: selectedConfig.selectedModes,
         sequenceName: selectedConfig.sequenceName,
+
+        paymentMethod: "cash",
+        paymentConfirmed: false,
+        paymentStatus: "unpaid",
+        userControlEnabled: false,
+        adminOverride: false,
+
+        helmetDetected: false,
+        programStarted: false,
+        programFinished: false,
+        programStep: "waiting_payment",
+        programStepEndsAt: null,
+        programRunId: null,
+        retrievalQrVerified: false,
+
+        deviceStatus: {
+          lock: true,
+          mist: false,
+          fan: false,
+          uvc: false,
+        },
+
         createdAt: serverTimestamp(),
         startAt: serverTimestamp(),
         paymentRequestedAt: serverTimestamp(),
@@ -154,7 +180,7 @@ export default function LockersPage() {
             <div>
               <div className="text-lg font-semibold">Reserve a locker</div>
               <div className="text-sm text-slate-400">
-                Choose an available locker, select a service, then proceed to <b>cash coin payment</b>.
+                Choose an available locker, select a service, then pay using the coin slot.
               </div>
             </div>
 
@@ -198,7 +224,7 @@ export default function LockersPage() {
                 Selected service: <b>{selectedConfig.label}</b>
               </div>
               <div>
-                Payment method: <b>Cash (coins) only</b>
+                Payment method: <b>Cash coins only</b>
               </div>
               <div>
                 Required amount: <b>₱{selectedConfig.amount}</b>
@@ -226,7 +252,7 @@ export default function LockersPage() {
               <div>
                 <div className="text-lg font-semibold">Your current booking</div>
                 <div className="text-sm text-slate-400">
-                  You can only reserve <b>one locker at a time</b>. Continue your current locker session.
+                  You can only reserve <b>one locker at a time</b>.
                 </div>
               </div>
               <StatusPill status={myBooking.data.status} />
