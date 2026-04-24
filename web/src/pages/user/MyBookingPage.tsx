@@ -26,8 +26,6 @@ function toMs(ts: any): number | null {
   return null;
 }
 
-const DEFAULT_PAYMENT_AMOUNT_PHP = 25;
-
 function stepIndexFor(status?: string | null) {
   if (status === "reserved") return 0;
   if (status === "pending_payment") return 1;
@@ -38,7 +36,7 @@ function stepIndexFor(status?: string | null) {
 
 function getServiceLabel(serviceType?: string | null) {
   if (serviceType === "locker_only") return "Locker Only";
-  if (serviceType === "disinfectant") return "Disinfectant";
+  if (serviceType === "disinfectant") return "Disinfectant Only";
   if (serviceType === "combined") return "Combined";
   return "Locker Service";
 }
@@ -60,6 +58,7 @@ export default function MyBookingPage() {
 
   useEffect(() => {
     if (!uid) return;
+
     const q = query(
       collection(db, "bookings"),
       where("userId", "==", uid),
@@ -89,27 +88,20 @@ export default function MyBookingPage() {
     });
   }, [booking?.lockerId]);
 
-  useEffect(() => {
-    if (!booking?.id) return;
-
-    const paymentConfirmed =
-      (booking as any)?.paymentConfirmed === true ||
-      (booking as any)?.paymentStatus === "paid";
-
-    const userControlEnabled = (booking as any)?.userControlEnabled === true;
-
-    if (booking.status === "active" && paymentConfirmed && userControlEnabled) {
-      navigate(`/app/control/${booking.id}`);
-    }
-  }, [booking, navigate]);
-
   const holdMs = useMemo(() => toMs((booking as any)?.holdExpiresAt), [booking]);
 
   const retrievalQrPayload = useMemo(() => {
     const b = booking;
     if (!b || b.status !== "active") return null;
 
+    const paid =
+      (b as any)?.paymentConfirmed === true ||
+      (b as any)?.paymentStatus === "paid";
+
+    if (!paid) return null;
+
     const claimToken = (b as any)?.claimQrToken ?? b.id;
+
     return JSON.stringify({
       v: 1,
       type: "claim",
@@ -185,14 +177,20 @@ export default function MyBookingPage() {
 
   const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
   const stepIdx = stepIndexFor(booking.status);
+
   const amount =
     typeof (booking as any)?.amount === "number"
-      ? (booking as any)?.amount
-      : DEFAULT_PAYMENT_AMOUNT_PHP;
+      ? (booking as any).amount
+      : 25;
+
   const serviceType = (booking as any)?.serviceType ?? "locker_only";
   const serviceLabel = getServiceLabel(serviceType);
   const coinGuide = getCoinGuide(amount);
   const refCode = booking?.id ? booking.id.slice(0, 10) : "";
+
+  const paymentConfirmed =
+    (booking as any)?.paymentConfirmed === true ||
+    (booking as any)?.paymentStatus === "paid";
 
   return (
     <div className="space-y-4">
@@ -310,7 +308,7 @@ export default function MyBookingPage() {
                 <div className="font-semibold">Instructions</div>
                 <div className="mt-1 text-slate-300">
                   Insert coins into the locker coin slot. Once the total reaches <b>₱{amount}</b>, the ESP32
-                  will notify the backend and the locker will proceed to the next stage.
+                  will notify the backend and the locker will open so you can place your helmet inside.
                 </div>
 
                 <div className="mt-3 text-xs text-slate-400">Reference code</div>
@@ -330,33 +328,25 @@ export default function MyBookingPage() {
             </div>
           )}
 
-          {booking.status === "active" && (
+          {booking.status === "active" && paymentConfirmed && (
             <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div>
                 <div className="font-semibold">Locker in use</div>
                 <div className="text-sm text-slate-400">
-                  Your payment has been confirmed and the locker is assigned to you.
+                  Your payment has been confirmed. Use this QR later to verify that you are the owner before opening the locker.
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
                 <div className="font-semibold">Next step</div>
                 <div className="mt-1 text-slate-300">
-                  Continue to the locker control page to choose your cleaning mode:
-                  <b> Recommended Preset</b>, <b>Disinfect</b>, <b>Fan</b>, or <b>UV-C</b>.
+                  Continue to the locker control page to start the session, monitor the process, and open the locker after QR verification.
                 </div>
 
                 <div className="mt-3">
                   <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
                     Next
                   </Button>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                <div className="font-semibold">Important</div>
-                <div className="mt-1 text-slate-300">
-                  Keep your personal retrieval QR. You will use it later to reopen your locker.
                 </div>
               </div>
 
@@ -369,15 +359,14 @@ export default function MyBookingPage() {
                   <div>
                     <div className="font-semibold">Personal retrieval QR</div>
                     <div className="text-sm text-slate-400">
-                      Present this QR when you return. The ESP32-CAM will scan it, and the backend
-                      will verify that it belongs to your active booking and locker.
+                      This QR appears only after payment is confirmed. Show this to the ESP32-CAM scanner when you want to retrieve your helmet.
                     </div>
 
                     <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
 
                     <div className="mt-3 flex flex-col gap-2 md:flex-row">
                       <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
-                        Next
+                        Go to Control Panel
                       </Button>
 
                       <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
