@@ -34,15 +34,6 @@ const DEFAULT_MIST_SEC = Number(process.env.MIST_SECONDS || 180);
 const DEFAULT_DRYER_SEC = Number(process.env.DRYER_SECONDS || 180);
 const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 180);
 
-type BookingStatus =
-  | "reserved"
-  | "pending_payment"
-  | "active"
-  | "cancelled"
-  | "completed"
-  | "expired"
-  | "failed";
-
 function tsPlusMs(ts: admin.firestore.Timestamp, ms: number) {
   return admin.firestore.Timestamp.fromMillis(ts.toMillis() + ms);
 }
@@ -103,9 +94,8 @@ function parseQrPayload(body: any) {
 
 function deviceStatusForStep(step: string) {
   if (step === "mist") return { lock: true, mist: true, fan: false, uvc: false };
-  if (step === "fan") return { lock: true, mist: false, fan: true, uvc: false };
+  if (step === "fan" || step === "dryer") return { lock: true, mist: false, fan: true, uvc: false };
   if (step === "uvc") return { lock: true, mist: false, fan: false, uvc: true };
-  if (step === "awaiting_retrieval") return { lock: true, mist: false, fan: false, uvc: false };
   return { lock: true, mist: false, fan: false, uvc: false };
 }
 
@@ -211,6 +201,7 @@ app.post("/api/confirmPayment", async (req, res) => {
       if (!bSnap.exists) return { ok: false as const, error: "BOOKING_NOT_FOUND" };
 
       const booking = bSnap.data() as any;
+
       if (booking.status !== "pending_payment") {
         return { ok: false as const, error: "NOT_AWAITING_PAYMENT" };
       }
@@ -226,9 +217,7 @@ app.post("/api/confirmPayment", async (req, res) => {
           status: "available",
           occupied: false,
           currentBookingId: null,
-          reservedByUserId: null,
           pendingPayment: false,
-          reservationExpiresAt: null,
           pendingPaymentExpiresAt: null,
         });
 
@@ -384,7 +373,7 @@ app.post("/api/user/startProgram", async (req, res) => {
   const auth = await requireUserAuth(req);
   if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
-  const { bookingId, selectedModes, sequenceName } = req.body as {
+  const { bookingId, sequenceName } = req.body as {
     bookingId?: string;
     selectedModes?: string[];
     sequenceName?: string;
@@ -407,6 +396,7 @@ app.post("/api/user/startProgram", async (req, res) => {
         return { ok: false as const, error: "PAYMENT_NOT_CONFIRMED" };
       }
       if (booking.programStarted === true) return { ok: false as const, error: "PROGRAM_ALREADY_STARTED" };
+      if (booking.helmetDetected !== true) return { ok: false as const, error: "HELMET_NOT_DETECTED" };
 
       const lockerId = booking.lockerId as string | undefined;
       if (!lockerId) return { ok: false as const, error: "INVALID_BOOKING" };
@@ -431,10 +421,6 @@ app.post("/api/user/startProgram", async (req, res) => {
         });
 
         return { ok: true as const, lockerId, serviceType, programStep: "locker_locked" };
-      }
-
-      if (booking.helmetDetected !== true) {
-        return { ok: false as const, error: "HELMET_NOT_DETECTED" };
       }
 
       const programRunId = crypto.randomUUID();
@@ -610,11 +596,6 @@ app.post("/api/device/verifyQr", async (req, res) => {
   }
 });
 
-app.post("/api/verify", async (req, res) => {
-  req.url = "/api/device/verifyQr";
-  return app._router.handle(req, res, () => {});
-});
-
 app.post("/api/user/open", async (req, res) => {
   const auth = await requireUserAuth(req);
   if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
@@ -724,109 +705,11 @@ app.post("/api/user/complete", async (req, res) => {
   }
 });
 
-app.post("/api/complete", async (req, res) => {
-  const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
-
-  const { lockerId, deviceId, success } = req.body as {
-    lockerId?: string;
-    deviceId?: string;
-    success?: boolean;
-  };
-
-  if (!lockerId) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
-
-  try {
-    const lockerRef = db.doc(`lockers/${lockerId}`);
-
-    const result = await db.runTransaction(async (tx) => {
-      const lSnap = await tx.get(lockerRef);
-      if (!lSnap.exists) return { ok: false as const, error: "LOCKER_NOT_FOUND" };
-
-      const locker = lSnap.data() as any;
-      const bookingId = locker.currentBookingId as string | undefined;
-      if (!bookingId) return { ok: false as const, error: "NO_ACTIVE_BOOKING" };
-
-      const bookingRef = db.doc(`bookings/${bookingId}`);
-
-      tx.update(bookingRef, {
-        status: "completed",
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        completedByDeviceId: deviceId ?? null,
-        disinfectionOk: success ?? true,
-        programStep: "completed",
-        deviceStatus: {
-          lock: true,
-          mist: false,
-          fan: false,
-          uvc: false,
-        },
-      });
-
-      tx.update(lockerRef, {
-        status: "available",
-        occupied: false,
-        currentBookingId: null,
-        reservedByUserId: null,
-        pendingPayment: false,
-        reservationExpiresAt: null,
-        pendingPaymentExpiresAt: null,
-        lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { ok: true as const, bookingId };
-    });
-
-    if (!result.ok) return res.status(400).json(result);
-
-    return res.json({ ok: true, bookingId: result.bookingId });
-  } catch (err: any) {
-    console.error("complete error", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
-  }
-});
-
 app.post("/api/expireNow", async (req, res) => {
   const auth = requireDeviceKey(req);
   if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
-  try {
-    const now = admin.firestore.Timestamp.now();
-
-    const snap = await db
-      .collection("bookings")
-      .where("status", "==", "pending_payment")
-      .where("holdExpiresAt", "<=", now)
-      .limit(50)
-      .get();
-
-    for (const d of snap.docs) {
-      const b = d.data() as any;
-      const lockerId = b.lockerId;
-
-      await db.runTransaction(async (tx) => {
-        tx.update(d.ref, {
-          status: "expired",
-          expiredAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        if (lockerId) {
-          tx.update(db.doc(`lockers/${lockerId}`), {
-            status: "available",
-            occupied: false,
-            currentBookingId: null,
-            pendingPayment: false,
-            pendingPaymentExpiresAt: null,
-          });
-        }
-      });
-    }
-
-    return res.json({ ok: true, expired: snap.size });
-  } catch (err: any) {
-    console.error("expireNow error", err);
-    return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
-  }
+  return res.json({ ok: true });
 });
 
 const port = Number(process.env.PORT) || 3000;
