@@ -64,16 +64,6 @@ async function postJsonAsUser<T>(path: string, body: any): Promise<T> {
   return data as T;
 }
 
-export function deviceVerifyQr(input: {
-  bookingId?: string;
-  lockerId?: string;
-  token?: string;
-  qrPayload?: string;
-  deviceId?: string;
-}) {
-  return postJson<any>("/api/device/verifyQr", input);
-}
-
 export function deviceConfirmPayment(input: {
   lockerId: string;
   deviceId?: string;
@@ -103,12 +93,14 @@ export function deviceProgramProgress(input: {
   return postJson<any>("/api/device/programProgress", input);
 }
 
-export function deviceComplete(input: {
-  lockerId: string;
+export function deviceVerifyQr(input: {
+  qrPayload?: string;
+  bookingId?: string;
+  lockerId?: string;
+  token?: string;
   deviceId?: string;
-  success?: boolean;
 }) {
-  return postJson<any>("/api/complete", input);
+  return postJson<any>("/api/device/verifyQr", input);
 }
 
 export function expireNow() {
@@ -138,11 +130,10 @@ export function userCompleteBooking(input: {
 const api = {
   getDeviceKey,
   setDeviceKey,
-  deviceVerifyQr,
   deviceConfirmPayment,
   deviceHelmetStatus,
   deviceProgramProgress,
-  deviceComplete,
+  deviceVerifyQr,
   expireNow,
   userStartProgram,
   userOpenLocker,
