@@ -33,8 +33,8 @@ const SERVICE_OPTIONS: Record<
   locker_only: {
     label: "Locker Only",
     amount: 25,
-    durationMin: 300,
-    description: "Use the locker for helmet storage only.",
+    durationMin: 600, // 10 hours
+    description: "Use the locker for helmet storage only. Time limit: 10 hours.",
     selectedModes: [],
     sequenceName: "locker_only",
   },
@@ -42,15 +42,15 @@ const SERVICE_OPTIONS: Record<
     label: "Disinfectant Only",
     amount: 25,
     durationMin: 30,
-    description: "Run the fixed cleaning sequence: mist, fan, then UV-C.",
+    description: "Run the fixed cleaning sequence: pump, fan, then UV-C.",
     selectedModes: ["mist", "dryer", "uvc"],
     sequenceName: "disinfectant",
   },
   combined: {
     label: "Combined",
     amount: 30,
-    durationMin: 300,
-    description: "Locker storage plus full cleaning sequence.",
+    durationMin: 600, // 10 hours
+    description: "Locker storage plus full cleaning sequence. Time limit: 10 hours.",
     selectedModes: ["mist", "dryer", "uvc"],
     sequenceName: "combined",
   },
@@ -130,6 +130,7 @@ export default function LockersPage() {
         adminOverride: false,
 
         helmetDetected: false,
+        doorClosed: false,
         programStarted: false,
         programFinished: false,
         programStep: "waiting_payment",
