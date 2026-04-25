@@ -74,13 +74,14 @@ export function deviceConfirmPayment(input: {
   return postJson<any>("/api/confirmPayment", input);
 }
 
-export function deviceHelmetStatus(input: {
+export function deviceSensorStatus(input: {
   lockerId: string;
   bookingId?: string;
   deviceId?: string;
   helmetDetected: boolean;
+  doorClosed: boolean;
 }) {
-  return postJson<any>("/api/device/helmetStatus", input);
+  return postJson<any>("/api/device/sensorStatus", input);
 }
 
 export function deviceProgramProgress(input: {
@@ -131,7 +132,7 @@ const api = {
   getDeviceKey,
   setDeviceKey,
   deviceConfirmPayment,
-  deviceHelmetStatus,
+  deviceSensorStatus,
   deviceProgramProgress,
   deviceVerifyQr,
   expireNow,

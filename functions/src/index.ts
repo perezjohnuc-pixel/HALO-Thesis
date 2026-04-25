@@ -19,11 +19,6 @@ const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "1mb" }));
 
-app.use((req, _res, next) => {
-  console.log(`${req.method} ${req.path}`);
-  next();
-});
-
 const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
 
@@ -149,6 +144,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       serviceType: booking?.serviceType ?? null,
 
       helmetDetected: !!booking?.helmetDetected,
+      doorClosed: !!booking?.doorClosed,
       programStarted: !!booking?.programStarted,
       programFinished: !!booking?.programFinished,
       programStep: booking?.programStep ?? null,
@@ -237,7 +233,7 @@ app.post("/api/confirmPayment", async (req, res) => {
       }
 
       const now = admin.firestore.Timestamp.now();
-      const durationMin = Number(booking.durationMin ?? 300);
+      const durationMin = Number(booking.durationMin ?? 600);
       const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
 
       const payRef = db.collection("payments").doc();
@@ -271,6 +267,7 @@ app.post("/api/confirmPayment", async (req, res) => {
         paymentPayload,
 
         helmetDetected: false,
+        doorClosed: false,
         programStarted: false,
         programFinished: false,
         programStep: "waiting_helmet",
@@ -321,17 +318,18 @@ app.post("/api/confirmPayment", async (req, res) => {
   }
 });
 
-app.post("/api/device/helmetStatus", async (req, res) => {
+app.post("/api/device/sensorStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
   if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
-  const { lockerId, bookingId, helmetDetected } = req.body as {
+  const { lockerId, bookingId, helmetDetected, doorClosed } = req.body as {
     lockerId?: string;
     bookingId?: string;
     helmetDetected?: boolean;
+    doorClosed?: boolean;
   };
 
-  if (!lockerId || typeof helmetDetected !== "boolean") {
+  if (!lockerId || typeof helmetDetected !== "boolean" || typeof doorClosed !== "boolean") {
     return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   }
 
@@ -352,7 +350,9 @@ app.post("/api/device/helmetStatus", async (req, res) => {
 
     const patch: Record<string, any> = {
       helmetDetected,
+      doorClosed,
       helmetDetectedAt: helmetDetected ? admin.firestore.FieldValue.serverTimestamp() : null,
+      doorClosedAt: doorClosed ? admin.firestore.FieldValue.serverTimestamp() : null,
       lastDeviceUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
@@ -362,9 +362,9 @@ app.post("/api/device/helmetStatus", async (req, res) => {
 
     await bookingRef.update(patch);
 
-    return res.json({ ok: true, bookingId: activeBookingId, helmetDetected });
+    return res.json({ ok: true, bookingId: activeBookingId, helmetDetected, doorClosed });
   } catch (err: any) {
-    console.error("helmetStatus error", err);
+    console.error("sensorStatus error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
 });
@@ -397,6 +397,7 @@ app.post("/api/user/startProgram", async (req, res) => {
       }
       if (booking.programStarted === true) return { ok: false as const, error: "PROGRAM_ALREADY_STARTED" };
       if (booking.helmetDetected !== true) return { ok: false as const, error: "HELMET_NOT_DETECTED" };
+      if (booking.doorClosed !== true) return { ok: false as const, error: "DOOR_NOT_CLOSED" };
 
       const lockerId = booking.lockerId as string | undefined;
       if (!lockerId) return { ok: false as const, error: "INVALID_BOOKING" };
@@ -510,7 +511,13 @@ app.post("/api/device/programProgress", async (req, res) => {
 
     const patch: Record<string, any> = {
       programStep,
-      deviceStatus: deviceStatusForStep(programStep),
+      deviceStatus: programStep === "mist"
+        ? { lock: true, mist: true, fan: false, uvc: false }
+        : programStep === "fan"
+        ? { lock: true, mist: false, fan: true, uvc: false }
+        : programStep === "uvc"
+        ? { lock: true, mist: false, fan: false, uvc: true }
+        : { lock: true, mist: false, fan: false, uvc: false },
       lastDeviceUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
@@ -537,7 +544,16 @@ app.post("/api/device/verifyQr", async (req, res) => {
   if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
   try {
-    const { bookingId, lockerId, token } = parseQrPayload(req.body);
+    let bookingId = req.body.bookingId;
+    let lockerId = req.body.lockerId;
+    let token = req.body.token;
+
+    if (req.body.qrPayload && typeof req.body.qrPayload === "string") {
+      const parsed = JSON.parse(req.body.qrPayload);
+      bookingId = parsed.bookingId;
+      lockerId = parsed.lockerId;
+      token = parsed.token;
+    }
 
     if (!bookingId || !lockerId || !token) {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
@@ -703,13 +719,6 @@ app.post("/api/user/complete", async (req, res) => {
     console.error("user complete error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL", message: err?.message ?? String(err) });
   }
-});
-
-app.post("/api/expireNow", async (req, res) => {
-  const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
-
-  return res.json({ ok: true });
 });
 
 const port = Number(process.env.PORT) || 3000;
