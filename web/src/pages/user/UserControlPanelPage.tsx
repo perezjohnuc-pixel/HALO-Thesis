@@ -18,12 +18,16 @@ type BookingDoc = {
   amount?: number;
   selectedModes?: string[];
   sequenceName?: string;
+  endAt?: any;
+
   helmetDetected?: boolean;
+  doorClosed?: boolean;
   programStarted?: boolean;
   programFinished?: boolean;
   programStep?: string;
   programStepEndsAt?: any;
   retrievalQrVerified?: boolean;
+
   deviceStatus?: {
     lock?: boolean;
     mist?: boolean;
@@ -44,21 +48,21 @@ const PRESETS: Preset[] = [
   {
     id: "locker_only",
     title: "Start Locker Session",
-    subtitle: "Lock the locker for storage only.",
+    subtitle: "Locks the locker for storage only. No cleaning process.",
     sequenceName: "locker_only",
     selectedModes: [],
   },
   {
     id: "disinfect",
     title: "Start Disinfectant",
-    subtitle: "Mist 3 minutes, fan 3 minutes, then UV-C 3 minutes.",
+    subtitle: "Pump 3 minutes, fan 3 minutes, then UV-C 3 minutes.",
     sequenceName: "disinfectant",
     selectedModes: ["mist", "dryer", "uvc"],
   },
   {
     id: "combined",
     title: "Start Combined Process",
-    subtitle: "Locker storage with full cleaning sequence.",
+    subtitle: "Storage plus full cleaning sequence.",
     sequenceName: "combined",
     selectedModes: ["mist", "dryer", "uvc"],
   },
@@ -83,7 +87,7 @@ function getStepLabel(step?: string) {
   if (step === "waiting_helmet") return "Waiting for helmet";
   if (step === "ready_to_start") return "Ready to start";
   if (step === "locker_locked") return "Locker locked";
-  if (step === "mist") return "Mist running";
+  if (step === "mist") return "Pump running";
   if (step === "fan") return "Fan running";
   if (step === "uvc") return "UV-C running";
   if (step === "awaiting_retrieval") return "Awaiting QR retrieval";
@@ -160,10 +164,12 @@ export default function UserControlPanelPage() {
   }, [booking]);
 
   const stepEndsAtMs = useMemo(() => toMs(booking?.programStepEndsAt), [booking?.programStepEndsAt]);
+  const endAtMs = useMemo(() => toMs(booking?.endAt), [booking?.endAt]);
 
   const canStartProgram =
     canUseControls &&
     booking?.helmetDetected === true &&
+    booking?.doorClosed === true &&
     booking?.programStarted !== true &&
     booking?.programStep !== "locker_locked";
 
@@ -179,6 +185,11 @@ export default function UserControlPanelPage() {
 
     if (booking.helmetDetected !== true) {
       setErr("Helmet is not detected yet. Place the helmet inside the locker first.");
+      return;
+    }
+
+    if (booking.doorClosed !== true) {
+      setErr("Please close the locker door before starting the program.");
       return;
     }
 
@@ -273,6 +284,7 @@ export default function UserControlPanelPage() {
   const serviceLabel = getServiceLabel(booking.serviceType);
   const amount = typeof booking.amount === "number" ? booking.amount : 25;
   const programStep = booking.programStep ?? "—";
+  const showLockerTimer = booking.serviceType === "locker_only" || booking.serviceType === "combined";
 
   return (
     <div className="space-y-4">
@@ -318,6 +330,15 @@ export default function UserControlPanelPage() {
             </div>
           </div>
 
+          {showLockerTimer && endAtMs && (
+            <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
+              <div className="text-sm text-blue-100">Locker time remaining</div>
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown targetMs={endAtMs} />
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 grid gap-3 md:grid-cols-4">
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
               <div className="text-xs text-slate-400">Helmet</div>
@@ -327,15 +348,15 @@ export default function UserControlPanelPage() {
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-              <div className="text-xs text-slate-400">Program</div>
-              <div className="mt-1 font-semibold">{getStepLabel(programStep)}</div>
+              <div className="text-xs text-slate-400">Door</div>
+              <div className="mt-1 font-semibold">
+                {booking.doorClosed ? "Closed" : "Open"}
+              </div>
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-              <div className="text-xs text-slate-400">Lock</div>
-              <div className="mt-1 font-semibold">
-                {booking.deviceStatus?.lock ? "Locked" : "Unlocked"}
-              </div>
+              <div className="text-xs text-slate-400">Program</div>
+              <div className="mt-1 font-semibold">{getStepLabel(programStep)}</div>
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
@@ -359,13 +380,19 @@ export default function UserControlPanelPage() {
             <div>
               <div className="font-semibold">Start process</div>
               <div className="mt-1 text-sm text-slate-400">
-                Place the helmet inside. When the sensor detects it, press Start.
+                Place the helmet inside and close the door before pressing Start.
               </div>
             </div>
 
             {!booking.helmetDetected && (
               <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
                 Helmet is not detected yet. Insert the helmet before starting.
+              </div>
+            )}
+
+            {booking.helmetDetected && !booking.doorClosed && (
+              <div className="mt-3 rounded-xl border border-orange-500/40 bg-orange-500/10 p-3 text-sm text-orange-200">
+                Helmet detected. Please close the locker door before starting the program.
               </div>
             )}
 
