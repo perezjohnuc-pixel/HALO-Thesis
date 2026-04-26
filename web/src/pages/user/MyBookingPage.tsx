@@ -96,6 +96,18 @@ export default function MyBookingPage() {
     });
   }, [booking?.lockerId]);
 
+  // After ESP32-CAM verifies the QR, automatically take the user to the control panel.
+  useEffect(() => {
+    if (!booking?.id) return;
+
+    const qrVerified = (booking as any)?.retrievalQrVerified === true;
+    const active = booking.status === "active";
+
+    if (active && qrVerified) {
+      navigate(`/app/control/${booking.id}?retrieve=1`, { replace: true });
+    }
+  }, [booking, navigate]);
+
   const holdMs = useMemo(() => toMs((booking as any)?.holdExpiresAt), [booking]);
 
   const retrievalQrPayload = useMemo(() => {

@@ -1,323 +1,507 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  collection,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  Timestamp,
-  where,
-  limit,
-  doc,
-  setDoc,
-} from "firebase/firestore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { db } from "../../lib/firebase";
-import { useAuth } from "../../lib/auth";
-import type { Booking, Locker } from "../../lib/types";
+import { userCompleteBooking, userOpenLocker, userStartProgram } from "../../lib/api";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
-import StatusPill from "../../components/StatusPill";
-import { useNavigate } from "react-router-dom";
+import Countdown from "../../components/Countdown";
 
-type ServiceType = "locker_only" | "disinfectant" | "combined";
+type BookingDoc = {
+  id?: string;
+  lockerId?: string;
+  status?: string;
+  paymentConfirmed?: boolean;
+  paymentStatus?: string;
+  userControlEnabled?: boolean;
+  adminOverride?: boolean;
+  serviceType?: string;
+  amount?: number;
+  selectedModes?: string[];
+  sequenceName?: string;
+  endAt?: any;
 
-const SERVICE_OPTIONS: Record<
-  ServiceType,
-  {
-    label: string;
-    amount: number;
-    durationMin: number;
-    description: string;
-    selectedModes: string[];
-    sequenceName: string;
-  }
-> = {
-  locker_only: {
-    label: "Locker Only",
-    amount: 25,
-    durationMin: 600, // 10 hours
-    description: "Use the locker for helmet storage only. Time limit: 10 hours.",
-    selectedModes: [],
-    sequenceName: "locker_only",
-  },
-  disinfectant: {
-    label: "Disinfectant Only",
-    amount: 25,
-    durationMin: 30,
-    description: "Run the fixed cleaning sequence: pump, fan, then UV-C.",
-    selectedModes: ["mist", "dryer", "uvc"],
-    sequenceName: "disinfectant",
-  },
-  combined: {
-    label: "Combined",
-    amount: 30,
-    durationMin: 600, // 10 hours
-    description: "Locker storage plus full cleaning sequence. Time limit: 10 hours.",
-    selectedModes: ["mist", "dryer", "uvc"],
-    sequenceName: "combined",
-  },
+  helmetDetected?: boolean;
+  doorClosed?: boolean;
+  programStarted?: boolean;
+  programFinished?: boolean;
+  programStep?: string;
+  programStepEndsAt?: any;
+  retrievalQrVerified?: boolean;
+
+  deviceStatus?: {
+    lock?: boolean;
+    mist?: boolean;
+    fan?: boolean;
+    uvc?: boolean;
+  };
 };
 
-export default function LockersPage() {
-  const { user } = useAuth();
+type Preset = {
+  id: "locker_only" | "disinfect" | "combined";
+  title: string;
+  subtitle: string;
+  sequenceName: string;
+  selectedModes: string[];
+};
+
+const PRESETS: Preset[] = [
+  {
+    id: "locker_only",
+    title: "Start Locker Session",
+    subtitle: "Locks the locker for storage only. No cleaning process.",
+    sequenceName: "locker_only",
+    selectedModes: [],
+  },
+  {
+    id: "disinfect",
+    title: "Start Disinfectant",
+    subtitle: "Pump 10 seconds, fan 30 seconds, then UV-C 30 seconds.",
+    sequenceName: "disinfectant",
+    selectedModes: ["mist", "dryer", "uvc"],
+  },
+  {
+    id: "combined",
+    title: "Start Combined Process",
+    subtitle: "Storage plus full cleaning sequence.",
+    sequenceName: "combined",
+    selectedModes: ["mist", "dryer", "uvc"],
+  },
+];
+
+function getServiceLabel(serviceType?: string | null) {
+  if (serviceType === "locker_only") return "Locker Only";
+  if (serviceType === "disinfectant") return "Disinfectant Only";
+  if (serviceType === "combined") return "Combined";
+  return "Locker Service";
+}
+
+function toMs(ts: any): number | null {
+  if (!ts) return null;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (typeof ts.seconds === "number") return ts.seconds * 1000;
+  return null;
+}
+
+function getStepLabel(step?: string) {
+  if (step === "waiting_payment") return "Waiting for payment";
+  if (step === "waiting_helmet") return "Waiting for helmet";
+  if (step === "ready_to_start") return "Ready to start";
+  if (step === "locker_locked") return "Locker locked";
+  if (step === "mist") return "Pump running";
+  if (step === "fan") return "Fan running";
+  if (step === "uvc") return "UV-C running";
+  if (step === "awaiting_retrieval") return "Awaiting QR retrieval";
+  if (step === "awaiting_open") return "QR verified";
+  if (step === "open") return "Locker opened";
+  if (step === "completed") return "Completed";
+  return step || "—";
+}
+
+export default function UserControlPanelPage() {
+  const { bookingId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const [lockers, setLockers] = useState<Array<{ id: string; data: Locker }>>([]);
-  const [busy, setBusy] = useState(false);
-  const [myBooking, setMyBooking] = useState<{ id: string; data: Booking } | null>(null);
-  const [selectedService, setSelectedService] = useState<ServiceType>("locker_only");
+  const retrieveRef = useRef<HTMLDivElement | null>(null);
+
+  const [booking, setBooking] = useState<BookingDoc | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyPreset, setBusyPreset] = useState<string | null>(null);
+  const [busyOpen, setBusyOpen] = useState(false);
+  const [busyComplete, setBusyComplete] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, "lockers"));
-    return onSnapshot(q, (snap) => {
-      setLockers(snap.docs.map((d) => ({ id: d.id, data: d.data() as Locker })));
-    });
-  }, []);
+    if (!bookingId) return;
 
-  useEffect(() => {
-    if (!user) return;
+    const ref = doc(db, "bookings", bookingId);
 
-    const q = query(
-      collection(db, "bookings"),
-      where("userId", "==", user.uid),
-      where("status", "in", ["reserved", "pending_payment", "active"]),
-      limit(1)
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setBooking(null);
+          setLoading(false);
+          setErr("Booking not found.");
+          return;
+        }
+
+        setBooking({
+          id: snap.id,
+          ...(snap.data() as BookingDoc),
+        });
+
+        setLoading(false);
+      },
+      (e) => {
+        setErr(e.message);
+        setLoading(false);
+      }
     );
 
-    return onSnapshot(q, (snap) => {
-      const d = snap.docs[0];
-      setMyBooking(d ? ({ id: d.id, data: d.data() as Booking } as any) : null);
-    });
-  }, [user]);
+    return () => unsub();
+  }, [bookingId]);
 
-  const sorted = useMemo(() => {
-    return [...lockers].sort((a, b) => (a.data.name ?? a.id).localeCompare(b.data.name ?? b.id));
-  }, [lockers]);
+  // When QR is verified, force the page to focus on the open/retrieve section.
+  useEffect(() => {
+    const shouldRetrieve = searchParams.get("retrieve") === "1";
+    const qrVerified = booking?.retrievalQrVerified === true;
 
-  const selectedConfig = SERVICE_OPTIONS[selectedService];
+    if ((shouldRetrieve || qrVerified) && retrieveRef.current) {
+      setTimeout(() => {
+        retrieveRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 250);
+    }
+  }, [booking?.retrievalQrVerified, searchParams]);
 
-  async function reserve(lockerId: string) {
-    if (!user) return;
+  const paymentConfirmed = useMemo(() => {
+    return booking?.paymentConfirmed === true || booking?.paymentStatus === "paid";
+  }, [booking]);
 
-    if (myBooking) {
-      alert("You already have an active or ongoing booking.");
-      navigate("/app/booking");
+  const canUseControls = useMemo(() => {
+    return (
+      booking?.status === "active" &&
+      paymentConfirmed &&
+      booking?.userControlEnabled === true &&
+      booking?.adminOverride !== true
+    );
+  }, [booking, paymentConfirmed]);
+
+  const availablePresets = useMemo(() => {
+    const serviceType = booking?.serviceType;
+
+    if (serviceType === "locker_only") return PRESETS.filter((p) => p.id === "locker_only");
+    if (serviceType === "disinfectant") return PRESETS.filter((p) => p.id === "disinfect");
+    if (serviceType === "combined") return PRESETS.filter((p) => p.id === "combined");
+
+    return [];
+  }, [booking]);
+
+  const stepEndsAtMs = useMemo(() => toMs(booking?.programStepEndsAt), [booking?.programStepEndsAt]);
+  const endAtMs = useMemo(() => toMs(booking?.endAt), [booking?.endAt]);
+
+  const canStartProgram =
+    canUseControls &&
+    booking?.helmetDetected === true &&
+    booking?.programStarted !== true &&
+    booking?.programStep !== "locker_locked";
+
+  const canOpen =
+    canUseControls &&
+    booking?.retrievalQrVerified === true &&
+    booking?.programStep !== "open" &&
+    booking?.status === "active";
+
+  // Important safety check:
+  // Finish/Complete is disabled until the locker is actually opened.
+  const canComplete =
+    canUseControls &&
+    booking?.status === "active" &&
+    booking?.programStep === "open";
+
+  async function startPreset(preset: Preset) {
+    if (!bookingId || !booking) return;
+    if (!canUseControls) return;
+
+    if (booking.helmetDetected !== true) {
+      setErr("Helmet is not detected yet. Place the helmet inside the locker first.");
       return;
     }
 
-    setBusy(true);
-
     try {
-      const now = Date.now();
-      const paymentDeadline = Timestamp.fromMillis(now + 3 * 60 * 1000);
+      setBusyPreset(preset.id);
+      setErr(null);
+      setOkMsg(null);
 
-      const bookingRef = doc(collection(db, "bookings"));
-      const bookingId = bookingRef.id;
+      await userStartProgram({
+        bookingId,
+        selectedModes: preset.selectedModes,
+        sequenceName: preset.sequenceName,
+      });
 
-      await setDoc(bookingRef, {
-        userId: user.uid,
-        lockerId,
-        status: "pending_payment",
-
-        serviceType: selectedService,
-        amount: selectedConfig.amount,
-        durationMin: selectedConfig.durationMin,
-        selectedModes: selectedConfig.selectedModes,
-        sequenceName: selectedConfig.sequenceName,
-
-        paymentMethod: "cash",
-        paymentConfirmed: false,
-        paymentStatus: "unpaid",
-        userControlEnabled: false,
-        adminOverride: false,
-
-        helmetDetected: false,
-        doorClosed: false,
-        programStarted: false,
-        programFinished: false,
-        programStep: "waiting_payment",
-        programStepEndsAt: null,
-        programRunId: null,
-        retrievalQrVerified: false,
-
-        deviceStatus: {
-          lock: true,
-          mist: false,
-          fan: false,
-          uvc: false,
-        },
-
-        createdAt: serverTimestamp(),
-        startAt: serverTimestamp(),
-        paymentRequestedAt: serverTimestamp(),
-        holdExpiresAt: paymentDeadline,
-        claimQrToken: bookingId,
-      } as any);
-
-      await setDoc(
-        doc(db, "lockers", lockerId),
-        {
-          currentBookingId: bookingId,
-          pendingPayment: true,
-          occupied: false,
-          status: "pending_payment",
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      navigate("/app/booking");
+      setOkMsg(`${preset.title} started.`);
     } catch (e: any) {
-      console.error(e);
-      alert(e?.message ?? String(e));
+      setErr(e.message ?? String(e));
     } finally {
-      setBusy(false);
+      setBusyPreset(null);
     }
   }
 
-  return (
-    <div className="space-y-6">
+  async function openLocker() {
+    if (!bookingId) return;
+
+    try {
+      setBusyOpen(true);
+      setErr(null);
+      setOkMsg(null);
+
+      await userOpenLocker({ bookingId });
+      setOkMsg("Locker open command sent. Retrieve your helmet, then finish the booking.");
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setBusyOpen(false);
+    }
+  }
+
+  async function completeBooking() {
+    if (!bookingId || !booking) return;
+
+    if (booking.programStep !== "open") {
+      setErr("Open the locker first and retrieve your helmet before finishing the booking.");
+      return;
+    }
+
+    try {
+      setBusyComplete(true);
+      setErr(null);
+      setOkMsg(null);
+
+      await userCompleteBooking({
+        bookingId,
+        selectedModes: booking.selectedModes ?? [],
+        sequenceName: booking.sequenceName ?? "custom",
+      });
+
+      setOkMsg("Booking completed. Your locker will be released.");
+      navigate("/app/booking");
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setBusyComplete(false);
+    }
+  }
+
+  if (loading) {
+    return (
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
+          <div className="text-lg font-bold">Locker Control Panel</div>
+        </CardHeader>
+        <CardBody>
+          <div className="text-sm text-slate-400">Loading control panel...</div>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  if (!booking) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="text-lg font-bold">Locker Control Panel</div>
+        </CardHeader>
+        <CardBody>
+          <div className="text-sm text-red-300">{err ?? "Booking not found."}</div>
+          <div className="mt-4">
+            <Button onClick={() => navigate("/app/booking")}>Back to My Booking</Button>
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const serviceLabel = getServiceLabel(booking.serviceType);
+  const amount = typeof booking.amount === "number" ? booking.amount : 25;
+  const programStep = booking.programStep ?? "—";
+  const showLockerTimer = booking.serviceType === "locker_only" || booking.serviceType === "combined";
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-lg font-semibold">Reserve a locker</div>
+              <div className="text-lg font-bold">Locker Control Panel</div>
               <div className="text-sm text-slate-400">
-                Choose an available locker, select a service, then pay using the coin slot.
+                Start the session, scan QR for retrieval, then open and finish the booking.
               </div>
             </div>
 
-            {myBooking ? (
-              <Badge color="yellow">You have an ongoing booking</Badge>
-            ) : (
-              <Badge color="green">No active booking</Badge>
-            )}
+            <Badge color={canUseControls ? "green" : "yellow"}>
+              {canUseControls ? "Access Enabled" : "Restricted"}
+            </Badge>
           </div>
         </CardHeader>
 
         <CardBody>
-          <div className="space-y-4">
-            <div>
-              <div className="mb-2 text-sm font-medium text-slate-200">Choose service type</div>
+          {err && <div className="mb-4 text-sm text-red-300">{err}</div>}
+          {okMsg && <div className="mb-4 text-sm text-emerald-300">{okMsg}</div>}
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                {(Object.entries(SERVICE_OPTIONS) as Array<[ServiceType, (typeof SERVICE_OPTIONS)[ServiceType]]>).map(
-                  ([key, option]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setSelectedService(key)}
-                      className={`rounded-xl border p-4 text-left transition ${
-                        selectedService === key
-                          ? "border-cyan-400 bg-cyan-500/10"
-                          : "border-slate-800 bg-slate-950/40 hover:border-slate-700"
-                      }`}
-                    >
-                      <div className="font-semibold text-slate-100">{option.label}</div>
-                      <div className="mt-1 text-sm text-slate-400">{option.description}</div>
-                      <div className="mt-3 text-sm font-semibold text-slate-200">₱{option.amount}</div>
-                    </button>
-                  )
-                )}
+          <div className="grid gap-3 md:grid-cols-4">
+            <div>
+              <div className="text-sm text-slate-400">Booking ID</div>
+              <div className="break-all font-mono text-xs">{booking.id}</div>
+            </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Locker</div>
+              <div className="font-semibold">{booking.lockerId ?? "—"}</div>
+            </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Service</div>
+              <div className="font-semibold">{serviceLabel}</div>
+            </div>
+
+            <div>
+              <div className="text-sm text-slate-400">Amount Paid</div>
+              <div className="font-semibold">₱{amount}</div>
+            </div>
+          </div>
+
+          {showLockerTimer && endAtMs && (
+            <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
+              <div className="text-sm text-blue-100">Locker time remaining</div>
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown targetMs={endAtMs} />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+              <div className="text-xs text-slate-400">Helmet</div>
+              <div className="mt-1 font-semibold">
+                {booking.helmetDetected ? "Detected" : "Not detected"}
               </div>
             </div>
 
-            <div className="space-y-2 text-sm text-slate-300">
-              <div>
-                Selected service: <b>{selectedConfig.label}</b>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+              <div className="text-xs text-slate-400">Door</div>
+              <div className="mt-1 font-semibold">Skipped</div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+              <div className="text-xs text-slate-400">Program</div>
+              <div className="mt-1 font-semibold">{getStepLabel(programStep)}</div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+              <div className="text-xs text-slate-400">QR Verification</div>
+              <div className="mt-1 font-semibold">
+                {booking.retrievalQrVerified ? "Verified" : "Not verified"}
               </div>
-              <div>
-                Payment method: <b>Cash coins only</b>
+            </div>
+          </div>
+
+          {stepEndsAtMs && ["mist", "fan", "uvc"].includes(programStep) && (
+            <div className="mt-6 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+              <div className="text-sm text-cyan-100">Current step countdown</div>
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown targetMs={stepEndsAtMs} />
               </div>
-              <div>
-                Required amount: <b>₱{selectedConfig.amount}</b>
+            </div>
+          )}
+
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div>
+              <div className="font-semibold">Start process</div>
+              <div className="mt-1 text-sm text-slate-400">
+                Place the helmet inside before pressing Start.
               </div>
-              <div>
-                Coin guide:{" "}
-                <b>
-                  {selectedConfig.amount === 25
-                    ? "Insert five 5-peso coins"
-                    : "Insert six 5-peso coins"}
-                </b>
+            </div>
+
+            {!booking.helmetDetected && (
+              <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                Helmet is not detected yet. Insert the helmet before starting.
               </div>
-              <div>
-                Retrieval security: your <b>personal QR code</b> will be used later when reclaiming the locker.
+            )}
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {availablePresets.map((preset) => (
+                <div key={preset.id} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                  <div className="font-semibold">{preset.title}</div>
+                  <div className="mt-1 text-sm text-slate-400">{preset.subtitle}</div>
+
+                  <div className="mt-4">
+                    <Button
+                      className="w-full"
+                      disabled={!canStartProgram || busyPreset !== null}
+                      onClick={() => startPreset(preset)}
+                    >
+                      {busyPreset === preset.id ? "Starting..." : preset.title}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div
+            ref={retrieveRef}
+            className={
+              "mt-6 rounded-2xl border p-4 " +
+              (booking.retrievalQrVerified
+                ? "border-emerald-500/40 bg-emerald-500/10"
+                : "border-slate-800 bg-slate-950/40")
+            }
+          >
+            <div>
+              <div className="font-semibold">Retrieve helmet</div>
+
+              {!booking.retrievalQrVerified ? (
+                <div className="mt-1 text-sm text-slate-400">
+                  Scan your personal QR using the ESP32-CAM. After QR verification, the Open Locker button will be enabled.
+                </div>
+              ) : (
+                <div className="mt-1 text-sm text-emerald-200">
+                  QR verified. Press <b>Open Locker</b>, retrieve your helmet, then press <b>Finish and Lock Locker</b>.
+                </div>
+              )}
+            </div>
+
+            {booking.retrievalQrVerified && booking.programStep !== "open" && (
+              <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                Your QR was verified successfully. You can now open the locker.
               </div>
+            )}
+
+            {booking.programStep === "open" && (
+              <div className="mt-4 rounded-xl border border-blue-500/40 bg-blue-500/10 p-3 text-sm text-blue-100">
+                Locker is open. Retrieve your helmet first. After retrieving, press Finish and Lock Locker.
+              </div>
+            )}
+
+            {booking.programStep !== "open" && (
+              <div className="mt-4 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                Finish is disabled until you open the locker. This prevents accidental completion before retrieval.
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-col gap-2 md:flex-row">
+              <Button disabled={!canOpen || busyOpen} onClick={openLocker}>
+                {busyOpen ? "Opening..." : "Open Locker"}
+              </Button>
+
+              <Button
+                variant="secondary"
+                disabled={!canComplete || busyComplete}
+                onClick={completeBooking}
+                title={
+                  canComplete
+                    ? "Finish the booking"
+                    : "Open the locker and retrieve the helmet first"
+                }
+              >
+                {busyComplete ? "Finishing..." : "Finish and Lock Locker"}
+              </Button>
+
+              <Button variant="secondary" onClick={() => navigate("/app/booking")}>
+                Back to My Booking
+              </Button>
+
+              <Button variant="secondary" onClick={() => window.location.reload()}>
+                Refresh
+              </Button>
             </div>
           </div>
         </CardBody>
       </Card>
-
-      {myBooking ? (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold">Your current booking</div>
-                <div className="text-sm text-slate-400">
-                  You can only reserve <b>one locker at a time</b>.
-                </div>
-              </div>
-              <StatusPill status={myBooking.data.status} />
-            </div>
-          </CardHeader>
-          <CardBody>
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div className="text-sm text-slate-300">
-                Locker: <span className="font-semibold text-slate-100">{myBooking.data.lockerId}</span>
-                <span className="text-slate-500"> · Booking ID: </span>
-                <span className="font-mono text-xs text-slate-200">{myBooking.id}</span>
-              </div>
-              <Button onClick={() => navigate("/app/booking")}>Go to My Booking</Button>
-            </div>
-          </CardBody>
-        </Card>
-      ) : null}
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {sorted.map((l) => {
-          const canReserve = l.data.status === "available" && !myBooking;
-
-          return (
-            <Card key={l.id}>
-              <CardBody>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-base font-semibold">{l.data.name ?? l.id}</div>
-                    <div className="text-sm text-slate-400">{l.data.location ?? ""}</div>
-
-                    <div className="mt-2">
-                      <StatusPill status={l.data.status} />
-                    </div>
-
-                    <div className="mt-3 text-xs text-slate-500">
-                      Battery: {l.data.batteryPct ?? "—"}% • Last heartbeat: {l.data.lastHeartbeatAt ? "OK" : "—"}
-                    </div>
-                  </div>
-
-                  {myBooking ? (
-                    <Button variant="secondary" onClick={() => navigate("/app/booking")}>
-                      Go to booking
-                    </Button>
-                  ) : (
-                    <Button
-                      disabled={!canReserve || busy}
-                      onClick={() => reserve(l.id)}
-                      title={l.data.status !== "available" ? "Not available" : "Reserve locker"}
-                    >
-                      Reserve
-                    </Button>
-                  )}
-                </div>
-              </CardBody>
-            </Card>
-          );
-        })}
-      </div>
-
-      {sorted.length === 0 && (
-        <div className="text-sm text-slate-400">
-          No lockers found. Ask admin to add lockers in Admin → Lockers.
-        </div>
-      )}
     </div>
   );
 }

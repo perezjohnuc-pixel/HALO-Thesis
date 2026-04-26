@@ -810,7 +810,13 @@ app.post("/api/user/open", async (req, res) => {
 
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   const { bookingId, selectedModes, sequenceName } = req.body as {
     bookingId?: string;
@@ -819,7 +825,10 @@ app.post("/api/user/complete", async (req, res) => {
   };
 
   if (!bookingId) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   try {
@@ -829,23 +838,45 @@ app.post("/api/user/complete", async (req, res) => {
       const bSnap = await tx.get(bookingRef);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
-        return { ok: false as const, error: "FORBIDDEN" };
+        return {
+          ok: false as const,
+          error: "FORBIDDEN",
+        };
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
+      }
+
+      // Safety rule:
+      // The user cannot complete the booking until the locker has been opened.
+      if (booking.programStep !== "open") {
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_OPENED",
+          message: "Open the locker and retrieve the helmet before completing the booking.",
+        };
       }
 
       const lockerId = booking.lockerId as string | undefined;
 
       if (!lockerId) {
-        return { ok: false as const, error: "INVALID_BOOKING" };
+        return {
+          ok: false as const,
+          error: "INVALID_BOOKING",
+        };
       }
 
       const lockerRef = db.doc(`lockers/${lockerId}`);
@@ -882,7 +913,9 @@ app.post("/api/user/complete", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json({
       ok: true,
