@@ -30,7 +30,14 @@ function stepIndexFor(status?: string | null) {
   if (status === "reserved") return 0;
   if (status === "pending_payment") return 1;
   if (status === "active") return 2;
-  if (status === "completed" || status === "cancelled" || status === "expired" || status === "failed") return 3;
+  if (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "expired" ||
+    status === "failed"
+  ) {
+    return 3;
+  }
   return 0;
 }
 
@@ -83,6 +90,7 @@ export default function MyBookingPage() {
     }
 
     const ref = doc(db, "lockers", booking.lockerId);
+
     return onSnapshot(ref, (snap) => {
       setLocker(snap.exists() ? ({ id: snap.id, ...snap.data() } as any) : null);
     });
@@ -102,13 +110,9 @@ export default function MyBookingPage() {
 
     const claimToken = (b as any)?.claimQrToken ?? b.id;
 
-    return JSON.stringify({
-      v: 1,
-      type: "claim",
-      bookingId: b.id,
-      lockerId: b.lockerId,
-      token: claimToken,
-    });
+    // Short QR format for better ESP32-CAM scanning:
+    // HALO|bookingId|lockerId|token
+    return `HALO|${b.id}|${b.lockerId}|${claimToken}`;
   }, [booking]);
 
   async function cancel() {
@@ -203,6 +207,7 @@ export default function MyBookingPage() {
                 Reserve → Insert Coins → Use Locker → Retrieve with QR
               </div>
             </div>
+
             <StatusPill status={booking.status} />
           </div>
 
@@ -232,6 +237,7 @@ export default function MyBookingPage() {
                       >
                         {done ? "✓" : i + 1}
                       </div>
+
                       <div className="mt-1 text-xs font-semibold text-slate-200">{s.title}</div>
                       <div className="whitespace-nowrap text-[11px] text-slate-500">{s.desc}</div>
                     </div>
@@ -280,9 +286,11 @@ export default function MyBookingPage() {
           {(booking.status === "reserved" || booking.status === "pending_payment") && holdMs && (
             <div className="mt-4">
               <Badge color="yellow">Payment window</Badge>
+
               <div className="mt-2 text-3xl font-extrabold">
                 <Countdown targetMs={holdMs} />
               </div>
+
               <div className="mt-1 text-sm text-slate-400">
                 Insert coins within the time window to activate your locker session.
               </div>
@@ -306,16 +314,19 @@ export default function MyBookingPage() {
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
                 <div className="font-semibold">Instructions</div>
+
                 <div className="mt-1 text-slate-300">
                   Insert coins into the locker coin slot. Once the total reaches <b>₱{amount}</b>, the ESP32
                   will notify the backend and the locker will open so you can place your helmet inside.
                 </div>
 
                 <div className="mt-3 text-xs text-slate-400">Reference code</div>
+
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <div className="rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-xs">
                     {refCode}
                   </div>
+
                   <Button size="sm" variant="secondary" onClick={() => copyText(refCode)}>
                     {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
                   </Button>
@@ -339,6 +350,7 @@ export default function MyBookingPage() {
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
                 <div className="font-semibold">Next step</div>
+
                 <div className="mt-1 text-slate-300">
                   Continue to the locker control page to start the session, monitor the process, and open the locker after QR verification.
                 </div>
@@ -353,16 +365,19 @@ export default function MyBookingPage() {
               {retrievalQrPayload && (
                 <div className="grid items-start gap-4 md:grid-cols-2">
                   <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
-                    <QRCode value={retrievalQrPayload} size={180} />
+                    <QRCode value={retrievalQrPayload} size={220} />
                   </div>
 
                   <div>
                     <div className="font-semibold">Personal retrieval QR</div>
+
                     <div className="text-sm text-slate-400">
                       This QR appears only after payment is confirmed. Show this to the ESP32-CAM scanner when you want to retrieve your helmet.
                     </div>
 
-                    <div className="mt-2 break-all text-xs text-slate-500">{retrievalQrPayload}</div>
+                    <div className="mt-2 break-all text-xs text-slate-500">
+                      {retrievalQrPayload}
+                    </div>
 
                     <div className="mt-3 flex flex-col gap-2 md:flex-row">
                       <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
@@ -384,16 +399,20 @@ export default function MyBookingPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="font-semibold">Booking finished</div>
+
                   <div className="text-sm text-slate-400">
                     Status: <span className="font-semibold text-slate-200">{booking.status}</span>
                   </div>
                 </div>
 
-                <Badge color={booking.status === "completed" ? "green" : "red"}>{booking.status}</Badge>
+                <Badge color={booking.status === "completed" ? "green" : "red"}>
+                  {booking.status}
+                </Badge>
               </div>
 
               <div className="mt-4 flex flex-col gap-2 md:flex-row">
                 <Button onClick={() => navigate("/app/lockers")}>Reserve another locker</Button>
+
                 <Button variant="secondary" onClick={() => navigate("/app/history")}>
                   View history
                 </Button>
@@ -407,6 +426,7 @@ export default function MyBookingPage() {
                 Cancel booking
               </Button>
             )}
+
             <Button variant="secondary" onClick={() => window.location.reload()}>
               Refresh
             </Button>
