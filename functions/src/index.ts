@@ -50,25 +50,56 @@ function safeEq(a?: string, b?: string) {
 function requireDeviceKey(req: express.Request) {
   const header = (req.get("x-halo-device-key") || "").toString();
   const bearer = (req.get("authorization") || "").toString();
-  const token = header || (bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length) : "");
 
-  if (!token) return { ok: false as const, status: 401, error: "MISSING_DEVICE_KEY" };
-  if (token !== DEVICE_API_KEY) return { ok: false as const, status: 403, error: "INVALID_DEVICE_KEY" };
+  const token =
+    header ||
+    (bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length) : "");
+
+  if (!token) {
+    return {
+      ok: false as const,
+      status: 401,
+      error: "MISSING_DEVICE_KEY",
+    };
+  }
+
+  if (token !== DEVICE_API_KEY) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: "INVALID_DEVICE_KEY",
+    };
+  }
 
   return { ok: true as const };
 }
 
 async function requireUserAuth(req: express.Request) {
   const authHeader = (req.get("authorization") || "").toString();
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length)
+    : "";
 
-  if (!token) return { ok: false as const, status: 401, error: "MISSING_AUTH_TOKEN" };
+  if (!token) {
+    return {
+      ok: false as const,
+      status: 401,
+      error: "MISSING_AUTH_TOKEN",
+    };
+  }
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    return { ok: true as const, uid: decoded.uid };
+    return {
+      ok: true as const,
+      uid: decoded.uid,
+    };
   } catch {
-    return { ok: false as const, status: 401, error: "INVALID_AUTH_TOKEN" };
+    return {
+      ok: false as const,
+      status: 401,
+      error: "INVALID_AUTH_TOKEN",
+    };
   }
 }
 
@@ -88,7 +119,8 @@ function parseQrPayload(body: any) {
       };
     }
 
-    // Old JSON QR format is still supported.
+    // Old JSON QR format support:
+    // {"v":1,"type":"claim","bookingId":"...","lockerId":"...","token":"..."}
     const parsed = JSON.parse(raw);
 
     return {
@@ -106,11 +138,39 @@ function parseQrPayload(body: any) {
 }
 
 function deviceStatusForStep(step: string) {
-  if (step === "mist") return { lock: true, mist: true, fan: false, uvc: false };
-  if (step === "fan" || step === "dryer") return { lock: true, mist: false, fan: true, uvc: false };
-  if (step === "uvc") return { lock: true, mist: false, fan: false, uvc: true };
+  if (step === "mist") {
+    return {
+      lock: true,
+      mist: true,
+      fan: false,
+      uvc: false,
+    };
+  }
 
-  return { lock: true, mist: false, fan: false, uvc: false };
+  if (step === "fan" || step === "dryer") {
+    return {
+      lock: true,
+      mist: false,
+      fan: true,
+      uvc: false,
+    };
+  }
+
+  if (step === "uvc") {
+    return {
+      lock: true,
+      mist: false,
+      fan: false,
+      uvc: true,
+    };
+  }
+
+  return {
+    lock: true,
+    mist: false,
+    fan: false,
+    uvc: false,
+  };
 }
 
 function stepSeconds(step: string) {
@@ -131,19 +191,31 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/device/lockerStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   try {
     const lockerId = String(req.query.lockerId || "").trim();
 
     if (!lockerId) {
-      return res.status(400).json({ ok: false, error: "MISSING_LOCKER_ID" });
+      return res.status(400).json({
+        ok: false,
+        error: "MISSING_LOCKER_ID",
+      });
     }
 
     const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
-      return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "LOCKER_NOT_FOUND",
+      });
     }
 
     const locker = lockerSnap.data() as any;
@@ -155,7 +227,10 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       const bookingSnap = await db.doc(`bookings/${currentBookingId}`).get();
 
       if (bookingSnap.exists) {
-        booking = { id: bookingSnap.id, ...bookingSnap.data() };
+        booking = {
+          id: bookingSnap.id,
+          ...bookingSnap.data(),
+        };
       }
     }
 
@@ -201,18 +276,28 @@ app.get("/api/device/lockerStatus", async (req, res) => {
 
 app.post("/api/confirmPayment", async (req, res) => {
   const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
-  const { lockerId, deviceId, paymentPayload, provider, amountPaid } = req.body as {
-    lockerId?: string;
-    deviceId?: string;
-    paymentPayload?: string;
-    provider?: string;
-    amountPaid?: number;
-  };
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
+
+  const { lockerId, deviceId, paymentPayload, provider, amountPaid } =
+    req.body as {
+      lockerId?: string;
+      deviceId?: string;
+      paymentPayload?: string;
+      provider?: string;
+      amountPaid?: number;
+    };
 
   if (!lockerId || !paymentPayload) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   try {
@@ -222,27 +307,39 @@ app.post("/api/confirmPayment", async (req, res) => {
       const lSnap = await tx.get(lockerRef);
 
       if (!lSnap.exists) {
-        return { ok: false as const, error: "LOCKER_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_FOUND",
+        };
       }
 
       const locker = lSnap.data() as any;
       const bookingId = locker.currentBookingId as string | undefined;
 
       if (!bookingId) {
-        return { ok: false as const, error: "NO_ACTIVE_BOOKING" };
+        return {
+          ok: false as const,
+          error: "NO_ACTIVE_BOOKING",
+        };
       }
 
       const bookingRef = db.doc(`bookings/${bookingId}`);
       const bSnap = await tx.get(bookingRef);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
 
       if (booking.status !== "pending_payment") {
-        return { ok: false as const, error: "NOT_AWAITING_PAYMENT" };
+        return {
+          ok: false as const,
+          error: "NOT_AWAITING_PAYMENT",
+        };
       }
 
       const holdMs = booking.holdExpiresAt?.toMillis?.() as number | undefined;
@@ -261,7 +358,10 @@ app.post("/api/confirmPayment", async (req, res) => {
           pendingPaymentExpiresAt: null,
         });
 
-        return { ok: false as const, error: "PAYMENT_WINDOW_EXPIRED" };
+        return {
+          ok: false as const,
+          error: "PAYMENT_WINDOW_EXPIRED",
+        };
       }
 
       const requiredAmount = Number(booking.amount ?? 25);
@@ -345,7 +445,9 @@ app.post("/api/confirmPayment", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json({
       ok: true,
@@ -369,7 +471,13 @@ app.post("/api/confirmPayment", async (req, res) => {
 
 app.post("/api/device/sensorStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   const { lockerId, bookingId, helmetDetected, doorClosed } = req.body as {
     lockerId?: string;
@@ -379,39 +487,54 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   };
 
   if (!lockerId || typeof helmetDetected !== "boolean") {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   try {
     const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
-      return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "LOCKER_NOT_FOUND",
+      });
     }
 
     const locker = lockerSnap.data() as any;
     const activeBookingId = bookingId || locker.currentBookingId;
 
     if (!activeBookingId) {
-      return res.status(400).json({ ok: false, error: "NO_ACTIVE_BOOKING" });
+      return res.status(400).json({
+        ok: false,
+        error: "NO_ACTIVE_BOOKING",
+      });
     }
 
     const bookingRef = db.doc(`bookings/${activeBookingId}`);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "BOOKING_NOT_FOUND",
+      });
     }
 
     const booking = bookingSnap.data() as any;
-
     const safeDoorClosed = typeof doorClosed === "boolean" ? doorClosed : true;
 
     const patch: Record<string, any> = {
       helmetDetected,
       doorClosed: safeDoorClosed,
-      helmetDetectedAt: helmetDetected ? admin.firestore.FieldValue.serverTimestamp() : null,
-      doorClosedAt: safeDoorClosed ? admin.firestore.FieldValue.serverTimestamp() : null,
+      helmetDetectedAt: helmetDetected
+        ? admin.firestore.FieldValue.serverTimestamp()
+        : null,
+      doorClosedAt: safeDoorClosed
+        ? admin.firestore.FieldValue.serverTimestamp()
+        : null,
       lastDeviceUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
@@ -440,7 +563,13 @@ app.post("/api/device/sensorStatus", async (req, res) => {
 
 app.post("/api/user/startProgram", async (req, res) => {
   const auth = await requireUserAuth(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   const { bookingId, sequenceName } = req.body as {
     bookingId?: string;
@@ -449,7 +578,10 @@ app.post("/api/user/startProgram", async (req, res) => {
   };
 
   if (!bookingId) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   try {
@@ -459,35 +591,56 @@ app.post("/api/user/startProgram", async (req, res) => {
       const bSnap = await tx.get(bookingRef);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
-        return { ok: false as const, error: "FORBIDDEN" };
+        return {
+          ok: false as const,
+          error: "FORBIDDEN",
+        };
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
       }
 
       if (booking.paymentConfirmed !== true && booking.paymentStatus !== "paid") {
-        return { ok: false as const, error: "PAYMENT_NOT_CONFIRMED" };
+        return {
+          ok: false as const,
+          error: "PAYMENT_NOT_CONFIRMED",
+        };
       }
 
       if (booking.programStarted === true) {
-        return { ok: false as const, error: "PROGRAM_ALREADY_STARTED" };
+        return {
+          ok: false as const,
+          error: "PROGRAM_ALREADY_STARTED",
+        };
       }
 
       if (booking.helmetDetected !== true) {
-        return { ok: false as const, error: "HELMET_NOT_DETECTED" };
+        return {
+          ok: false as const,
+          error: "HELMET_NOT_DETECTED",
+        };
       }
 
       const lockerId = booking.lockerId as string | undefined;
 
       if (!lockerId) {
-        return { ok: false as const, error: "INVALID_BOOKING" };
+        return {
+          ok: false as const,
+          error: "INVALID_BOOKING",
+        };
       }
 
       const serviceType = booking.serviceType ?? "locker_only";
@@ -548,9 +701,21 @@ app.post("/api/user/startProgram", async (req, res) => {
           programRunId,
           sequenceName: sequenceName ?? serviceType,
           steps: [
-            { id: "mist", order: 0, seconds: DEFAULT_MIST_SEC },
-            { id: "fan", order: 1, seconds: DEFAULT_DRYER_SEC },
-            { id: "uvc", order: 2, seconds: DEFAULT_UV_SEC },
+            {
+              id: "mist",
+              order: 0,
+              seconds: DEFAULT_MIST_SEC,
+            },
+            {
+              id: "fan",
+              order: 1,
+              seconds: DEFAULT_DRYER_SEC,
+            },
+            {
+              id: "uvc",
+              order: 2,
+              seconds: DEFAULT_UV_SEC,
+            },
           ],
         },
       });
@@ -564,7 +729,9 @@ app.post("/api/user/startProgram", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json(result);
   } catch (err: any) {
@@ -580,7 +747,13 @@ app.post("/api/user/startProgram", async (req, res) => {
 
 app.post("/api/device/programProgress", async (req, res) => {
   const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   const { lockerId, bookingId, programRunId, programStep } = req.body as {
     lockerId?: string;
@@ -590,11 +763,17 @@ app.post("/api/device/programProgress", async (req, res) => {
   };
 
   if (!lockerId || !bookingId || !programStep) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   if (!["mist", "fan", "uvc", "awaiting_retrieval"].includes(programStep)) {
-    return res.status(400).json({ ok: false, error: "INVALID_PROGRAM_STEP" });
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PROGRAM_STEP",
+    });
   }
 
   try {
@@ -602,17 +781,26 @@ app.post("/api/device/programProgress", async (req, res) => {
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
+      return res.status(404).json({
+        ok: false,
+        error: "BOOKING_NOT_FOUND",
+      });
     }
 
     const booking = bookingSnap.data() as any;
 
     if (booking.lockerId !== lockerId) {
-      return res.status(400).json({ ok: false, error: "LOCKER_MISMATCH" });
+      return res.status(400).json({
+        ok: false,
+        error: "LOCKER_MISMATCH",
+      });
     }
 
     if (programRunId && booking.programRunId && booking.programRunId !== programRunId) {
-      return res.status(400).json({ ok: false, error: "PROGRAM_RUN_MISMATCH" });
+      return res.status(400).json({
+        ok: false,
+        error: "PROGRAM_RUN_MISMATCH",
+      });
     }
 
     const patch: Record<string, any> = {
@@ -651,7 +839,13 @@ app.post("/api/device/programProgress", async (req, res) => {
 
 app.post("/api/device/verifyQr", async (req, res) => {
   const auth = requireDeviceKey(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   try {
     const { bookingId, lockerId, token } = parseQrPayload(req.body);
@@ -668,37 +862,59 @@ app.post("/api/device/verifyQr", async (req, res) => {
     const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const [bSnap, lSnap] = await Promise.all([tx.get(bookingRef), tx.get(lockerRef)]);
+      const [bSnap, lSnap] = await Promise.all([
+        tx.get(bookingRef),
+        tx.get(lockerRef),
+      ]);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       if (!lSnap.exists) {
-        return { ok: false as const, error: "LOCKER_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
       const locker = lSnap.data() as any;
 
       if (booking.lockerId !== lockerId) {
-        return { ok: false as const, error: "LOCKER_MISMATCH" };
+        return {
+          ok: false as const,
+          error: "LOCKER_MISMATCH",
+        };
       }
 
       if (locker.currentBookingId !== bookingId) {
-        return { ok: false as const, error: "LOCKER_NOT_ASSIGNED_TO_BOOKING" };
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_ASSIGNED_TO_BOOKING",
+        };
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
       }
 
       const expectedToken = booking.claimQrToken ?? bookingId;
+
       const expectedHash = sha256Hex(`${expectedToken}|${QR_SECRET}`);
       const receivedHash = sha256Hex(`${token}|${QR_SECRET}`);
 
       if (!safeEq(expectedHash, receivedHash)) {
-        return { ok: false as const, error: "INVALID_QR_TOKEN" };
+        return {
+          ok: false as const,
+          error: "INVALID_QR_TOKEN",
+        };
       }
 
       tx.update(bookingRef, {
@@ -720,7 +936,9 @@ app.post("/api/device/verifyQr", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json({
       ok: true,
@@ -741,12 +959,23 @@ app.post("/api/device/verifyQr", async (req, res) => {
 
 app.post("/api/user/open", async (req, res) => {
   const auth = await requireUserAuth(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
 
-  const { bookingId } = req.body as { bookingId?: string };
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
+
+  const { bookingId } = req.body as {
+    bookingId?: string;
+  };
 
   if (!bookingId) {
-    return res.status(400).json({ ok: false, error: "MISSING_BOOKING_ID" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_BOOKING_ID",
+    });
   }
 
   try {
@@ -756,21 +985,33 @@ app.post("/api/user/open", async (req, res) => {
       const bSnap = await tx.get(bookingRef);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
-        return { ok: false as const, error: "FORBIDDEN" };
+        return {
+          ok: false as const,
+          error: "FORBIDDEN",
+        };
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
       }
 
       if (booking.retrievalQrVerified !== true) {
-        return { ok: false as const, error: "QR_NOT_VERIFIED" };
+        return {
+          ok: false as const,
+          error: "QR_NOT_VERIFIED",
+        };
       }
 
       tx.update(bookingRef, {
@@ -790,7 +1031,9 @@ app.post("/api/user/open", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json({
       ok: true,
@@ -810,7 +1053,13 @@ app.post("/api/user/open", async (req, res) => {
 
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
-  if (!auth.ok) return res.status(auth.status).json({ ok: false, error: auth.error });
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+    });
+  }
 
   const { bookingId, selectedModes, sequenceName } = req.body as {
     bookingId?: string;
@@ -819,7 +1068,10 @@ app.post("/api/user/complete", async (req, res) => {
   };
 
   if (!bookingId) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_FIELDS",
+    });
   }
 
   try {
@@ -829,23 +1081,35 @@ app.post("/api/user/complete", async (req, res) => {
       const bSnap = await tx.get(bookingRef);
 
       if (!bSnap.exists) {
-        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_FOUND",
+        };
       }
 
       const booking = bSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
-        return { ok: false as const, error: "FORBIDDEN" };
+        return {
+          ok: false as const,
+          error: "FORBIDDEN",
+        };
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
       }
 
       const lockerId = booking.lockerId as string | undefined;
 
       if (!lockerId) {
-        return { ok: false as const, error: "INVALID_BOOKING" };
+        return {
+          ok: false as const,
+          error: "INVALID_BOOKING",
+        };
       }
 
       const lockerRef = db.doc(`lockers/${lockerId}`);
@@ -882,7 +1146,9 @@ app.post("/api/user/complete", async (req, res) => {
       };
     });
 
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
 
     return res.json({
       ok: true,
