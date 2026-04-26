@@ -19,15 +19,23 @@ const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "1mb" }));
 
+// =====================================================
+// ENV
+// =====================================================
 const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
 
 const UNLOCK_MS = 5000;
 
-const DEFAULT_MIST_SEC = Number(process.env.MIST_SECONDS || 180);
-const DEFAULT_DRYER_SEC = Number(process.env.DRYER_SECONDS || 180);
-const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 180);
+// For thesis demo:
+// mist = mini pump
+const DEFAULT_MIST_SEC = Number(process.env.MIST_SECONDS || 10);
+const DEFAULT_DRYER_SEC = Number(process.env.DRYER_SECONDS || 30);
+const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 30);
 
+// =====================================================
+// HELPERS
+// =====================================================
 function tsPlusMs(ts: admin.firestore.Timestamp, ms: number) {
   return admin.firestore.Timestamp.fromMillis(ts.toMillis() + ms);
 }
@@ -90,6 +98,7 @@ async function requireUserAuth(req: express.Request) {
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
+
     return {
       ok: true as const,
       uid: decoded.uid,
@@ -181,6 +190,9 @@ function stepSeconds(step: string) {
   return 0;
 }
 
+// =====================================================
+// HEALTH
+// =====================================================
 app.get("/", (_req, res) => {
   res.status(200).send("HALO Railway backend is running");
 });
@@ -189,6 +201,10 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
+// =====================================================
+// DEVICE: LOCKER STATUS
+// Main ESP32 calls this repeatedly.
+// =====================================================
 app.get("/api/device/lockerStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
 
@@ -236,6 +252,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
 
     return res.json({
       ok: true,
+
       lockerId,
       lockerStatus: locker.status ?? "unknown",
       pendingPayment: !!locker.pendingPayment,
@@ -274,6 +291,10 @@ app.get("/api/device/lockerStatus", async (req, res) => {
   }
 });
 
+// =====================================================
+// DEVICE: CONFIRM CASH PAYMENT
+// Main ESP32 calls this after enough coins are inserted.
+// =====================================================
 app.post("/api/confirmPayment", async (req, res) => {
   const auth = requireDeviceKey(req);
 
@@ -304,16 +325,16 @@ app.post("/api/confirmPayment", async (req, res) => {
     const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const lSnap = await tx.get(lockerRef);
+      const lockerSnap = await tx.get(lockerRef);
 
-      if (!lSnap.exists) {
+      if (!lockerSnap.exists) {
         return {
           ok: false as const,
           error: "LOCKER_NOT_FOUND",
         };
       }
 
-      const locker = lSnap.data() as any;
+      const locker = lockerSnap.data() as any;
       const bookingId = locker.currentBookingId as string | undefined;
 
       if (!bookingId) {
@@ -324,16 +345,16 @@ app.post("/api/confirmPayment", async (req, res) => {
       }
 
       const bookingRef = db.doc(`bookings/${bookingId}`);
-      const bSnap = await tx.get(bookingRef);
+      const bookingSnap = await tx.get(bookingRef);
 
-      if (!bSnap.exists) {
+      if (!bookingSnap.exists) {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
         };
       }
 
-      const booking = bSnap.data() as any;
+      const booking = bookingSnap.data() as any;
 
       if (booking.status !== "pending_payment") {
         return {
@@ -380,9 +401,9 @@ app.post("/api/confirmPayment", async (req, res) => {
       const durationMin = Number(booking.durationMin ?? 600);
       const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
 
-      const payRef = db.collection("payments").doc();
+      const paymentRef = db.collection("payments").doc();
 
-      tx.set(payRef, {
+      tx.set(paymentRef, {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         userId: booking.userId ?? null,
         bookingId,
@@ -398,7 +419,7 @@ app.post("/api/confirmPayment", async (req, res) => {
       tx.update(bookingRef, {
         status: "active",
         paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        paymentId: payRef.id,
+        paymentId: paymentRef.id,
         holdExpiresAt: null,
         activeAt: admin.firestore.FieldValue.serverTimestamp(),
         endAt,
@@ -411,7 +432,10 @@ app.post("/api/confirmPayment", async (req, res) => {
         paymentPayload,
 
         helmetDetected: false,
+
+        // Door sensor is removed/skipped.
         doorClosed: true,
+
         programStarted: false,
         programFinished: false,
         programStep: "waiting_helmet",
@@ -469,6 +493,10 @@ app.post("/api/confirmPayment", async (req, res) => {
   }
 });
 
+// =====================================================
+// DEVICE: SENSOR STATUS
+// Main ESP32 reports helmet sensor status.
+// =====================================================
 app.post("/api/device/sensorStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
 
@@ -524,6 +552,9 @@ app.post("/api/device/sensorStatus", async (req, res) => {
     }
 
     const booking = bookingSnap.data() as any;
+
+    // Door sensor removed. If ESP32 sends a value, accept it.
+    // Otherwise, default to true.
     const safeDoorClosed = typeof doorClosed === "boolean" ? doorClosed : true;
 
     const patch: Record<string, any> = {
@@ -561,6 +592,10 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   }
 });
 
+// =====================================================
+// USER: START PROGRAM
+// App calls this when user presses Start.
+// =====================================================
 app.post("/api/user/startProgram", async (req, res) => {
   const auth = await requireUserAuth(req);
 
@@ -588,16 +623,16 @@ app.post("/api/user/startProgram", async (req, res) => {
     const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const bSnap = await tx.get(bookingRef);
+      const bookingSnap = await tx.get(bookingRef);
 
-      if (!bSnap.exists) {
+      if (!bookingSnap.exists) {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
         };
       }
 
-      const booking = bSnap.data() as any;
+      const booking = bookingSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
         return {
@@ -645,6 +680,7 @@ app.post("/api/user/startProgram", async (req, res) => {
 
       const serviceType = booking.serviceType ?? "locker_only";
 
+      // Locker only: just lock the locker.
       if (serviceType === "locker_only") {
         tx.update(bookingRef, {
           programStarted: true,
@@ -670,6 +706,8 @@ app.post("/api/user/startProgram", async (req, res) => {
         };
       }
 
+      // Disinfectant or combined:
+      // Start pump/mist first.
       const programRunId = crypto.randomUUID();
       const now = admin.firestore.Timestamp.now();
       const stepEndsAt = tsPlusMs(now, stepSeconds("mist") * 1000);
@@ -703,16 +741,19 @@ app.post("/api/user/startProgram", async (req, res) => {
           steps: [
             {
               id: "mist",
+              label: "Pump",
               order: 0,
               seconds: DEFAULT_MIST_SEC,
             },
             {
               id: "fan",
+              label: "Fan",
               order: 1,
               seconds: DEFAULT_DRYER_SEC,
             },
             {
               id: "uvc",
+              label: "UV-C",
               order: 2,
               seconds: DEFAULT_UV_SEC,
             },
@@ -745,6 +786,10 @@ app.post("/api/user/startProgram", async (req, res) => {
   }
 });
 
+// =====================================================
+// DEVICE: PROGRAM PROGRESS
+// Main ESP32 calls this when pump/fan/uvc changes.
+// =====================================================
 app.post("/api/device/programProgress", async (req, res) => {
   const auth = requireDeviceKey(req);
 
@@ -837,6 +882,10 @@ app.post("/api/device/programProgress", async (req, res) => {
   }
 });
 
+// =====================================================
+// DEVICE: VERIFY QR
+// ESP32-CAM calls this after scanning personal QR.
+// =====================================================
 app.post("/api/device/verifyQr", async (req, res) => {
   const auth = requireDeviceKey(req);
 
@@ -862,27 +911,27 @@ app.post("/api/device/verifyQr", async (req, res) => {
     const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const [bSnap, lSnap] = await Promise.all([
+      const [bookingSnap, lockerSnap] = await Promise.all([
         tx.get(bookingRef),
         tx.get(lockerRef),
       ]);
 
-      if (!bSnap.exists) {
+      if (!bookingSnap.exists) {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
         };
       }
 
-      if (!lSnap.exists) {
+      if (!lockerSnap.exists) {
         return {
           ok: false as const,
           error: "LOCKER_NOT_FOUND",
         };
       }
 
-      const booking = bSnap.data() as any;
-      const locker = lSnap.data() as any;
+      const booking = bookingSnap.data() as any;
+      const locker = lockerSnap.data() as any;
 
       if (booking.lockerId !== lockerId) {
         return {
@@ -957,6 +1006,10 @@ app.post("/api/device/verifyQr", async (req, res) => {
   }
 });
 
+// =====================================================
+// USER: OPEN LOCKER
+// App calls this after QR verification.
+// =====================================================
 app.post("/api/user/open", async (req, res) => {
   const auth = await requireUserAuth(req);
 
@@ -982,16 +1035,16 @@ app.post("/api/user/open", async (req, res) => {
     const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const bSnap = await tx.get(bookingRef);
+      const bookingSnap = await tx.get(bookingRef);
 
-      if (!bSnap.exists) {
+      if (!bookingSnap.exists) {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
         };
       }
 
-      const booking = bSnap.data() as any;
+      const booking = bookingSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
         return {
@@ -1051,6 +1104,11 @@ app.post("/api/user/open", async (req, res) => {
   }
 });
 
+// =====================================================
+// USER: COMPLETE BOOKING
+// App calls this only after locker has been opened.
+// Safety rule: cannot complete unless programStep === "open".
+// =====================================================
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
 
@@ -1078,16 +1136,16 @@ app.post("/api/user/complete", async (req, res) => {
     const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const bSnap = await tx.get(bookingRef);
+      const bookingSnap = await tx.get(bookingRef);
 
-      if (!bSnap.exists) {
+      if (!bookingSnap.exists) {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
         };
       }
 
-      const booking = bSnap.data() as any;
+      const booking = bookingSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
         return {
@@ -1097,7 +1155,21 @@ app.post("/api/user/complete", async (req, res) => {
       }
 
       if (booking.status !== "active") {
-        return { ok: false as const, error: "BOOKING_NOT_ACTIVE" };
+        return {
+          ok: false as const,
+          error: "BOOKING_NOT_ACTIVE",
+        };
+      }
+
+      // IMPORTANT:
+      // User cannot complete until locker has actually been opened.
+      if (booking.programStep !== "open") {
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_OPENED",
+          message:
+            "Open the locker and retrieve the helmet before completing the booking.",
+        };
       }
 
       const lockerId = booking.lockerId as string | undefined;
@@ -1163,6 +1235,9 @@ app.post("/api/user/complete", async (req, res) => {
   }
 });
 
+// =====================================================
+// SERVER
+// =====================================================
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, "0.0.0.0", () => {
