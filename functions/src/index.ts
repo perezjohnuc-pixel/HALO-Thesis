@@ -20,7 +20,7 @@ app.use(cors({ origin: true }));
 app.use(express.json({ limit: "1mb" }));
 
 // =====================================================
-// ENV
+// ENV SETTINGS
 // =====================================================
 const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
@@ -225,7 +225,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       });
     }
 
-    const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
+    const lockerSnap = await db.doc(lockers/${lockerId}).get();
 
     if (!lockerSnap.exists) {
       return res.status(404).json({
@@ -240,7 +240,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
     let booking: any = null;
 
     if (currentBookingId) {
-      const bookingSnap = await db.doc(`bookings/${currentBookingId}`).get();
+      const bookingSnap = await db.doc(bookings/${currentBookingId}).get();
 
       if (bookingSnap.exists) {
         booking = {
@@ -322,7 +322,7 @@ app.post("/api/confirmPayment", async (req, res) => {
   }
 
   try {
-    const lockerRef = db.doc(`lockers/${lockerId}`);
+    const lockerRef = db.doc(lockers/${lockerId});
 
     const result = await db.runTransaction(async (tx) => {
       const lockerSnap = await tx.get(lockerRef);
@@ -344,7 +344,7 @@ app.post("/api/confirmPayment", async (req, res) => {
         };
       }
 
-      const bookingRef = db.doc(`bookings/${bookingId}`);
+      const bookingRef = db.doc(bookings/${bookingId});
       const bookingSnap = await tx.get(bookingRef);
 
       if (!bookingSnap.exists) {
@@ -377,6 +377,7 @@ app.post("/api/confirmPayment", async (req, res) => {
           currentBookingId: null,
           pendingPayment: false,
           pendingPaymentExpiresAt: null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
         return {
@@ -433,7 +434,7 @@ app.post("/api/confirmPayment", async (req, res) => {
 
         helmetDetected: false,
 
-        // Door sensor is removed/skipped.
+        // Door sensor is skipped.
         doorClosed: true,
 
         programStarted: false,
@@ -457,6 +458,7 @@ app.post("/api/confirmPayment", async (req, res) => {
         lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
         currentBookingId: bookingId,
         occupied: false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       return {
@@ -522,7 +524,7 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   }
 
   try {
-    const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
+    const lockerSnap = await db.doc(lockers/${lockerId}).get();
 
     if (!lockerSnap.exists) {
       return res.status(404).json({
@@ -541,7 +543,7 @@ app.post("/api/device/sensorStatus", async (req, res) => {
       });
     }
 
-    const bookingRef = db.doc(`bookings/${activeBookingId}`);
+    const bookingRef = db.doc(bookings/${activeBookingId});
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
@@ -553,8 +555,7 @@ app.post("/api/device/sensorStatus", async (req, res) => {
 
     const booking = bookingSnap.data() as any;
 
-    // Door sensor removed. If ESP32 sends a value, accept it.
-    // Otherwise, default to true.
+    // Door sensor removed/skipped.
     const safeDoorClosed = typeof doorClosed === "boolean" ? doorClosed : true;
 
     const patch: Record<string, any> = {
@@ -620,7 +621,7 @@ app.post("/api/user/startProgram", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(`bookings/${bookingId}`);
+    const bookingRef = db.doc(bookings/${bookingId});
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -680,7 +681,7 @@ app.post("/api/user/startProgram", async (req, res) => {
 
       const serviceType = booking.serviceType ?? "locker_only";
 
-      // Locker only: just lock the locker.
+      // Locker only: lock the locker, no cleaning process.
       if (serviceType === "locker_only") {
         tx.update(bookingRef, {
           programStarted: true,
@@ -729,7 +730,7 @@ app.post("/api/user/startProgram", async (req, res) => {
         startedByUserAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      tx.set(db.collection("deviceCommands").doc(`program_${bookingId}`), {
+      tx.set(db.collection("deviceCommands").doc(program_${bookingId}), {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         lockerId,
         type: "sanitation_program",
@@ -822,7 +823,7 @@ app.post("/api/device/programProgress", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(`bookings/${bookingId}`);
+    const bookingRef = db.doc(bookings/${bookingId});
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
@@ -907,8 +908,8 @@ app.post("/api/device/verifyQr", async (req, res) => {
       });
     }
 
-    const bookingRef = db.doc(`bookings/${bookingId}`);
-    const lockerRef = db.doc(`lockers/${lockerId}`);
+    const bookingRef = db.doc(bookings/${bookingId});
+    const lockerRef = db.doc(lockers/${lockerId});
 
     const result = await db.runTransaction(async (tx) => {
       const [bookingSnap, lockerSnap] = await Promise.all([
@@ -956,8 +957,8 @@ app.post("/api/device/verifyQr", async (req, res) => {
 
       const expectedToken = booking.claimQrToken ?? bookingId;
 
-      const expectedHash = sha256Hex(`${expectedToken}|${QR_SECRET}`);
-      const receivedHash = sha256Hex(`${token}|${QR_SECRET}`);
+      const expectedHash = sha256Hex(${expectedToken}|${QR_SECRET});
+      const receivedHash = sha256Hex(${token}|${QR_SECRET});
 
       if (!safeEq(expectedHash, receivedHash)) {
         return {
@@ -1032,7 +1033,7 @@ app.post("/api/user/open", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(`bookings/${bookingId}`);
+    const bookingRef = db.doc(bookings/${bookingId});
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -1106,8 +1107,9 @@ app.post("/api/user/open", async (req, res) => {
 
 // =====================================================
 // USER: COMPLETE BOOKING
-// App calls this only after locker has been opened.
-// Safety rule: cannot complete unless programStep === "open".
+// This version restores your previous flow:
+// Complete and Release can complete any active booking.
+// It releases the locker back to available.
 // =====================================================
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
@@ -1133,7 +1135,7 @@ app.post("/api/user/complete", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(`bookings/${bookingId}`);
+    const bookingRef = db.doc(bookings/${bookingId});
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -1161,17 +1163,6 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
-      // IMPORTANT:
-      // User cannot complete until locker has actually been opened.
-      if (booking.programStep !== "open") {
-        return {
-          ok: false as const,
-          error: "LOCKER_NOT_OPENED",
-          message:
-            "Open the locker and retrieve the helmet before completing the booking.",
-        };
-      }
-
       const lockerId = booking.lockerId as string | undefined;
 
       if (!lockerId) {
@@ -1181,7 +1172,15 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
-      const lockerRef = db.doc(`lockers/${lockerId}`);
+      const lockerRef = db.doc(lockers/${lockerId});
+      const lockerSnap = await tx.get(lockerRef);
+
+      if (!lockerSnap.exists) {
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_FOUND",
+        };
+      }
 
       tx.update(bookingRef, {
         status: "completed",
@@ -1190,6 +1189,8 @@ app.post("/api/user/complete", async (req, res) => {
         selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
         sequenceName: sequenceName ?? booking.sequenceName ?? "custom",
         programStep: "completed",
+        programFinished: true,
+        retrievalQrVerified: false,
         deviceStatus: {
           lock: true,
           mist: false,
@@ -1206,7 +1207,9 @@ app.post("/api/user/complete", async (req, res) => {
         pendingPayment: false,
         reservationExpiresAt: null,
         pendingPaymentExpiresAt: null,
+        lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
         lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       return {
@@ -1241,5 +1244,5 @@ app.post("/api/user/complete", async (req, res) => {
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`HALO backend listening on port ${port}`);
+  console.log(HALO backend listening on port ${port});
 });
