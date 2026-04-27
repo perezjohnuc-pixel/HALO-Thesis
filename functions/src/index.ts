@@ -225,7 +225,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       });
     }
 
-    const lockerSnap = await db.doc(lockers/${lockerId}).get();
+    const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
       return res.status(404).json({
@@ -240,7 +240,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
     let booking: any = null;
 
     if (currentBookingId) {
-      const bookingSnap = await db.doc(bookings/${currentBookingId}).get();
+      const bookingSnap = await db.doc(`bookings/${currentBookingId}`).get();
 
       if (bookingSnap.exists) {
         booking = {
@@ -322,7 +322,7 @@ app.post("/api/confirmPayment", async (req, res) => {
   }
 
   try {
-    const lockerRef = db.doc(lockers/${lockerId});
+    const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
       const lockerSnap = await tx.get(lockerRef);
@@ -344,7 +344,7 @@ app.post("/api/confirmPayment", async (req, res) => {
         };
       }
 
-      const bookingRef = db.doc(bookings/${bookingId});
+      const bookingRef = db.doc(`bookings/${bookingId}`);
       const bookingSnap = await tx.get(bookingRef);
 
       if (!bookingSnap.exists) {
@@ -524,7 +524,7 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   }
 
   try {
-    const lockerSnap = await db.doc(lockers/${lockerId}).get();
+    const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
       return res.status(404).json({
@@ -543,7 +543,7 @@ app.post("/api/device/sensorStatus", async (req, res) => {
       });
     }
 
-    const bookingRef = db.doc(bookings/${activeBookingId});
+    const bookingRef = db.doc(`bookings/${activeBookingId}`);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
@@ -621,7 +621,7 @@ app.post("/api/user/startProgram", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(bookings/${bookingId});
+    const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -730,7 +730,7 @@ app.post("/api/user/startProgram", async (req, res) => {
         startedByUserAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      tx.set(db.collection("deviceCommands").doc(program_${bookingId}), {
+      tx.set(db.collection("deviceCommands").doc(`program_${bookingId}`), {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         lockerId,
         type: "sanitation_program",
@@ -823,7 +823,7 @@ app.post("/api/device/programProgress", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(bookings/${bookingId});
+    const bookingRef = db.doc(`bookings/${bookingId}`);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
@@ -908,8 +908,8 @@ app.post("/api/device/verifyQr", async (req, res) => {
       });
     }
 
-    const bookingRef = db.doc(bookings/${bookingId});
-    const lockerRef = db.doc(lockers/${lockerId});
+    const bookingRef = db.doc(`bookings/${bookingId}`);
+    const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
       const [bookingSnap, lockerSnap] = await Promise.all([
@@ -957,8 +957,8 @@ app.post("/api/device/verifyQr", async (req, res) => {
 
       const expectedToken = booking.claimQrToken ?? bookingId;
 
-      const expectedHash = sha256Hex(${expectedToken}|${QR_SECRET});
-      const receivedHash = sha256Hex(${token}|${QR_SECRET});
+      const expectedHash = sha256Hex(`${expectedToken}|${QR_SECRET}`);
+      const receivedHash = sha256Hex(`${token}|${QR_SECRET}`);
 
       if (!safeEq(expectedHash, receivedHash)) {
         return {
@@ -1033,7 +1033,7 @@ app.post("/api/user/open", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(bookings/${bookingId});
+    const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -1135,7 +1135,7 @@ app.post("/api/user/complete", async (req, res) => {
   }
 
   try {
-    const bookingRef = db.doc(bookings/${bookingId});
+    const bookingRef = db.doc(`bookings/${bookingId}`);
 
     const result = await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
@@ -1163,18 +1163,16 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
-      // IMPORTANT:
-      // User cannot complete until locker has actually been opened.
-      if (booking.programStep !== "open") {
+      const lockerId = booking.lockerId as string | undefined;
+
+      if (!lockerId) {
         return {
           ok: false as const,
-          error: "LOCKER_NOT_OPENED",
-          message:
-            "Open the locker and retrieve the helmet before completing the booking.",
+          error: "INVALID_BOOKING",
         };
       }
 
-      const lockerRef = db.doc(lockers/${lockerId});
+      const lockerRef = db.doc(`lockers/${lockerId}`);
       const lockerSnap = await tx.get(lockerRef);
 
       if (!lockerSnap.exists) {
@@ -1183,8 +1181,6 @@ app.post("/api/user/complete", async (req, res) => {
           error: "LOCKER_NOT_FOUND",
         };
       }
-
-      const lockerRef = db.doc(`lockers/${lockerId}`);
 
       tx.update(bookingRef, {
         status: "completed",
@@ -1248,5 +1244,5 @@ app.post("/api/user/complete", async (req, res) => {
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(HALO backend listening on port ${port});
+  console.log(`HALO backend listening on port ${port}`);
 });
