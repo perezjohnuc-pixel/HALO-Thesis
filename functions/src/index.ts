@@ -1163,12 +1163,14 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
-      const lockerId = booking.lockerId as string | undefined;
-
-      if (!lockerId) {
+      // IMPORTANT:
+      // User cannot complete until locker has actually been opened.
+      if (booking.programStep !== "open") {
         return {
           ok: false as const,
-          error: "INVALID_BOOKING",
+          error: "LOCKER_NOT_OPENED",
+          message:
+            "Open the locker and retrieve the helmet before completing the booking.",
         };
       }
 
@@ -1181,6 +1183,8 @@ app.post("/api/user/complete", async (req, res) => {
           error: "LOCKER_NOT_FOUND",
         };
       }
+
+      const lockerRef = db.doc(`lockers/${lockerId}`);
 
       tx.update(bookingRef, {
         status: "completed",
