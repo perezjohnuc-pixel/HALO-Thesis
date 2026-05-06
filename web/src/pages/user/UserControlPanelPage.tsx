@@ -97,6 +97,21 @@ function getStepLabel(step?: string) {
   return step || "—";
 }
 
+function getCompleteWarning(booking: BookingDoc | null, canUseControls: boolean) {
+  if (!booking) return "Booking information is still loading.";
+  if (!canUseControls) return "Controls are restricted. Make sure the booking is active and paid.";
+  if (booking.retrievalQrVerified !== true) {
+    return "Booking cannot be completed yet. Please scan your QR code first.";
+  }
+  if (booking.programStep !== "open") {
+    return "Booking cannot be completed yet. Please open the locker first.";
+  }
+  if (booking.helmetDetected === true) {
+    return "Helmet is still detected inside the locker. Please retrieve your helmet before completing the booking.";
+  }
+  return null;
+}
+
 export default function UserControlPanelPage() {
   const { bookingId } = useParams();
   const navigate = useNavigate();
@@ -179,6 +194,15 @@ export default function UserControlPanelPage() {
     booking?.programStep !== "open" &&
     booking?.status === "active";
 
+  const canComplete =
+    canUseControls &&
+    booking?.retrievalQrVerified === true &&
+    booking?.programStep === "open" &&
+    booking?.helmetDetected === false &&
+    booking?.status === "active";
+
+  const completeWarning = getCompleteWarning(booking, canUseControls);
+
   async function startPreset(preset: Preset) {
     if (!bookingId || !booking) return;
     if (!canUseControls) return;
@@ -221,7 +245,7 @@ export default function UserControlPanelPage() {
       setOkMsg(null);
 
       await userOpenLocker({ bookingId });
-      setOkMsg("Locker open command sent.");
+      setOkMsg("Locker open command sent. Please retrieve your helmet before completing the booking.");
     } catch (e: any) {
       setErr(e.message ?? String(e));
     } finally {
@@ -231,6 +255,13 @@ export default function UserControlPanelPage() {
 
   async function completeBooking() {
     if (!bookingId || !booking) return;
+
+    const warning = getCompleteWarning(booking, canUseControls);
+    if (warning) {
+      setErr(warning);
+      setOkMsg(null);
+      return;
+    }
 
     try {
       setBusyComplete(true);
@@ -294,7 +325,7 @@ export default function UserControlPanelPage() {
             <div>
               <div className="text-lg font-bold">Locker Control Panel</div>
               <div className="text-sm text-slate-400">
-                Start the session, scan QR for retrieval, then open and complete the booking.
+                Start the session, scan QR for retrieval, open the locker, retrieve the helmet, then complete the booking.
               </div>
             </div>
 
@@ -420,9 +451,15 @@ export default function UserControlPanelPage() {
             <div>
               <div className="font-semibold">Retrieve helmet</div>
               <div className="mt-1 text-sm text-slate-400">
-                Scan your personal QR using the ESP32-CAM. After QR verification, press Open Locker.
+                Scan your personal QR using the ESP32-CAM. After QR verification, press Open Locker and retrieve your helmet.
               </div>
             </div>
+
+            {completeWarning && (
+              <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                {completeWarning}
+              </div>
+            )}
 
             <div className="mt-4 flex flex-col gap-2 md:flex-row">
               <Button disabled={!canOpen || busyOpen} onClick={openLocker}>
@@ -431,7 +468,7 @@ export default function UserControlPanelPage() {
 
               <Button
                 variant="secondary"
-                disabled={busyComplete}
+                disabled={!canComplete || busyComplete}
                 onClick={completeBooking}
               >
                 {busyComplete ? "Completing..." : "Complete and Release"}
