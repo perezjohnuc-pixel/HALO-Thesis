@@ -1107,9 +1107,10 @@ app.post("/api/user/open", async (req, res) => {
 
 // =====================================================
 // USER: COMPLETE BOOKING
-// This version restores your previous flow:
-// Complete and Release can complete any active booking.
-// It releases the locker back to available.
+// Booking can only be completed after:
+// 1. QR was verified.
+// 2. Locker was opened.
+// 3. Helmet is no longer detected.
 // =====================================================
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
@@ -1144,6 +1145,7 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "BOOKING_NOT_FOUND",
+          message: "Booking record was not found.",
         };
       }
 
@@ -1153,6 +1155,7 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "FORBIDDEN",
+          message: "You are not allowed to complete this booking.",
         };
       }
 
@@ -1160,6 +1163,31 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "BOOKING_NOT_ACTIVE",
+          message: "Only active bookings can be completed.",
+        };
+      }
+
+      if (booking.retrievalQrVerified !== true) {
+        return {
+          ok: false as const,
+          error: "QR_NOT_VERIFIED",
+          message: "Please scan your QR code before completing the booking.",
+        };
+      }
+
+      if (booking.programStep !== "open") {
+        return {
+          ok: false as const,
+          error: "LOCKER_NOT_OPENED",
+          message: "Please open the locker before completing the booking.",
+        };
+      }
+
+      if (booking.helmetDetected === true) {
+        return {
+          ok: false as const,
+          error: "HELMET_STILL_INSIDE",
+          message: "Helmet is still detected inside the locker. Please retrieve it before completing the booking.",
         };
       }
 
@@ -1169,6 +1197,7 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "INVALID_BOOKING",
+          message: "Booking has no assigned locker.",
         };
       }
 
@@ -1179,6 +1208,7 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "LOCKER_NOT_FOUND",
+          message: "Locker record was not found.",
         };
       }
 
