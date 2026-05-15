@@ -58,6 +58,7 @@ const MODE_OPTIONS: ModeOption[] = [
 function getStepIndex(status?: string | null) {
   if (status === "awaiting_booking_qr") return 0;
   if (status === "confirmed") return 1;
+
   if (
     status === "mode_selected" ||
     status === "waiting_for_helmet" ||
@@ -66,10 +67,13 @@ function getStepIndex(status?: string | null) {
   ) {
     return 2;
   }
+
   if (status === "awaiting_payment" || status === "paid") return 3;
+
   if (status === "awaiting_retrieval_qr" || status === "retrieval_verified") {
     return 4;
   }
+
   if (
     status === "completed" ||
     status === "cancelled" ||
@@ -78,6 +82,7 @@ function getStepIndex(status?: string | null) {
   ) {
     return 5;
   }
+
   return 0;
 }
 
@@ -93,7 +98,7 @@ function getCoinGuide(amount: number) {
   return "Insert five 5-peso coins";
 }
 
-function terminal(status?: string | null) {
+function isTerminalStatus(status?: string | null) {
   return (
     status === "completed" ||
     status === "cancelled" ||
@@ -144,29 +149,36 @@ export default function MyBookingPage() {
     const ref = doc(db, "lockers", booking.lockerId);
 
     return onSnapshot(ref, (snap) => {
-      setLocker(snap.exists() ? ({ id: snap.id, ...snap.data() } as Locker) : null);
+      setLocker(
+        snap.exists() ? ({ id: snap.id, ...snap.data() } as Locker) : null
+      );
     });
   }, [booking?.lockerId]);
 
   const bookingQrPayload = useMemo(() => {
     if (!booking?.id || !booking?.lockerId || !booking?.userId) return null;
+
     return `HALO_BOOK|${booking.id}|${booking.lockerId}|${booking.userId}`;
   }, [booking]);
 
   const retrievalQrPayload = useMemo(() => {
     if (!booking?.id || !booking?.lockerId) return null;
+
     if (
       booking.status !== "awaiting_retrieval_qr" &&
       booking.status !== "retrieval_verified"
     ) {
       return null;
     }
+
     if (booking.paymentStatus !== "paid" && booking.paymentConfirmed !== true) {
       return null;
     }
+
     if (booking.retrievalQrGenerated !== true) return null;
 
     const token = booking.retrievalQrToken ?? booking.id;
+
     return `HALO_RETRIEVE|${booking.id}|${booking.lockerId}|${token}`;
   }, [booking]);
 
@@ -243,8 +255,10 @@ export default function MyBookingPage() {
           <div className="text-lg font-bold">My booking</div>
           <div className="text-sm text-slate-400">No recent booking found.</div>
         </CardHeader>
+
         <CardBody>
           <div className="text-sm text-slate-400">Reserve a locker to start.</div>
+
           <div className="mt-3">
             <Button className="w-full" onClick={() => navigate("/app/lockers")}>
               Go to Lockers
@@ -256,7 +270,7 @@ export default function MyBookingPage() {
   }
 
   const stepIdx = getStepIndex(booking.status);
-  const isTerminal = terminal(booking.status);
+  const isTerminal = isTerminalStatus(booking.status);
   const amountDue = typeof booking.amountDue === "number" ? booking.amountDue : 0;
   const amountPaid =
     typeof booking.amountPaid === "number" ? booking.amountPaid : 0;
@@ -283,11 +297,13 @@ export default function MyBookingPage() {
                 Scan retrieval QR
               </div>
             </div>
+
             <StatusPill status={booking.status} />
           </div>
 
+          {/* Mobile-safe step sequence */}
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
-            <div className="flex items-center">
+            <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
               {[
                 { title: "Confirm", desc: "Scan personal QR" },
                 { title: "Mode", desc: "Choose service" },
@@ -300,41 +316,31 @@ export default function MyBookingPage() {
                 const current = i === stepIdx;
 
                 return (
-                  <React.Fragment key={s.title}>
-                    <div className="min-w-0 flex flex-col items-center text-center">
-                      <div
-                        className={
-                          "flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold " +
-                          (done
-                            ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-200"
-                            : current
-                              ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-200"
-                              : "border-slate-700/60 bg-slate-800/60 text-slate-300")
-                        }
-                      >
-                        {done ? "✓" : i + 1}
-                      </div>
-                      <div className="mt-1 text-xs font-semibold text-slate-200">
-                        {s.title}
-                      </div>
-                      <div className="whitespace-nowrap text-[11px] text-slate-500">
-                        {s.desc}
-                      </div>
+                  <div
+                    key={s.title}
+                    className="flex min-w-0 flex-col items-center rounded-xl border border-slate-800/70 bg-slate-950/30 px-2 py-3 text-center"
+                  >
+                    <div
+                      className={
+                        "flex h-9 w-9 items-center justify-center rounded-full border text-sm font-bold " +
+                        (done
+                          ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-200"
+                          : current
+                            ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-200"
+                            : "border-slate-700/60 bg-slate-800/60 text-slate-300")
+                      }
+                    >
+                      {done ? "✓" : i + 1}
                     </div>
 
-                    {i < 5 && (
-                      <div
-                        className={
-                          "mx-2 h-1 flex-1 rounded " +
-                          (i < stepIdx
-                            ? "bg-emerald-500/30"
-                            : i === stepIdx
-                              ? "bg-cyan-500/25"
-                              : "bg-slate-800/60")
-                        }
-                      />
-                    )}
-                  </React.Fragment>
+                    <div className="mt-2 w-full truncate text-xs font-semibold text-slate-200">
+                      {s.title}
+                    </div>
+
+                    <div className="mt-1 hidden w-full text-[10px] leading-tight text-slate-500 sm:block">
+                      {s.desc}
+                    </div>
+                  </div>
                 );
               })}
             </div>
@@ -347,7 +353,9 @@ export default function MyBookingPage() {
           <div className="grid gap-3 md:grid-cols-3">
             <div>
               <div className="text-sm text-slate-400">Locker</div>
-              <div className="font-semibold">{locker?.name ?? booking.lockerId}</div>
+              <div className="font-semibold">
+                {locker?.name ?? booking.lockerId}
+              </div>
               <div className="text-xs text-slate-500">
                 Location: {locker?.location ?? "—"}
               </div>
@@ -356,7 +364,9 @@ export default function MyBookingPage() {
             <div>
               <div className="text-sm text-slate-400">Selected mode</div>
               <div className="font-semibold">{serviceLabel}</div>
-              <div className="text-xs text-slate-500">Amount due: ₱{amountDue}</div>
+              <div className="text-xs text-slate-500">
+                Amount due: ₱{amountDue}
+              </div>
             </div>
 
             <div>
@@ -371,6 +381,7 @@ export default function MyBookingPage() {
                 <div className="font-semibold">
                   Step 1: Scan personal QR to confirm booking
                 </div>
+
                 <div className="text-sm text-slate-300">
                   Show this QR to the locker scanner. Once verified, the
                   electromagnetic lock will unlock for initial access and mode
@@ -379,15 +390,17 @@ export default function MyBookingPage() {
               </div>
 
               <div className="grid items-start gap-4 md:grid-cols-2">
-                <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
+                <div className="flex justify-center rounded-2xl bg-white p-4 text-slate-950">
                   <QRCode value={bookingQrPayload} size={220} />
                 </div>
 
                 <div>
                   <div className="font-semibold">Personal booking QR payload</div>
+
                   <div className="mt-2 break-all text-xs text-slate-500">
                     {bookingQrPayload}
                   </div>
+
                   <Button
                     className="mt-3"
                     variant="secondary"
@@ -408,6 +421,7 @@ export default function MyBookingPage() {
           {booking.status === "confirmed" && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold">Step 2: Select service mode</div>
+
               <div className="mt-1 text-sm text-slate-400">
                 Choose the function you want to use. Payment will happen after
                 using the locker or disinfection process.
@@ -423,9 +437,11 @@ export default function MyBookingPage() {
                       <div className="font-semibold">{option.title}</div>
                       <Badge color="blue">₱{option.amountDue}</Badge>
                     </div>
+
                     <div className="mt-2 text-sm text-slate-400">
                       {option.description}
                     </div>
+
                     <Button
                       className="mt-4 w-full"
                       disabled={busyMode !== null}
@@ -444,19 +460,24 @@ export default function MyBookingPage() {
           ) && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold">Step 3: Use locker</div>
+
               <div className="mt-1 text-sm text-slate-400">
                 Place the helmet inside, close the door, and continue to the
                 control panel to start the selected mode.
               </div>
+
               <div className="mt-3 flex flex-wrap gap-2">
                 <Badge color={booking.helmetDetected ? "green" : "amber"}>
                   Helmet: {booking.helmetDetected ? "Detected" : "Not detected"}
                 </Badge>
+
                 <Badge color={booking.doorClosed ? "green" : "amber"}>
                   Door: {booking.doorClosed ? "Closed" : "Open"}
                 </Badge>
+
                 <Badge color="blue">{serviceLabel}</Badge>
               </div>
+
               <div className="mt-4">
                 <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
                   Go to Control Panel
@@ -469,11 +490,13 @@ export default function MyBookingPage() {
             <div className="mt-6 space-y-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
               <div>
                 <div className="font-semibold">Step 4: Pay through coin slot</div>
+
                 <div className="text-sm text-slate-300">
                   Insert coins into the locker coin slot. The ESP32 will confirm
                   the payment when the required amount is reached.
                 </div>
               </div>
+
               <div className="flex flex-wrap gap-2">
                 <Badge color="amber">Amount due: ₱{amountDue}</Badge>
                 <Badge color="blue">{getCoinGuide(amountDue)}</Badge>
@@ -488,6 +511,7 @@ export default function MyBookingPage() {
               <div className="mt-6 space-y-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
                 <div>
                   <div className="font-semibold">Step 5: Scan retrieval QR</div>
+
                   <div className="text-sm text-slate-300">
                     Payment is complete. Scan this new QR code through the QR
                     scanner to unlock the locker and retrieve the helmet.
@@ -495,19 +519,22 @@ export default function MyBookingPage() {
                 </div>
 
                 <div className="grid items-start gap-4 md:grid-cols-2">
-                  <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
+                  <div className="flex justify-center rounded-2xl bg-white p-4 text-slate-950">
                     <QRCode value={retrievalQrPayload} size={220} />
                   </div>
 
                   <div>
                     <div className="font-semibold">Retrieval QR payload</div>
+
                     <div className="mt-2 break-all text-xs text-slate-500">
                       {retrievalQrPayload}
                     </div>
+
                     <div className="mt-3 flex flex-col gap-2 md:flex-row">
                       <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
                         Go to Control Panel
                       </Button>
+
                       <Button
                         variant="secondary"
                         size="sm"
@@ -530,6 +557,7 @@ export default function MyBookingPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="font-semibold">Booking finished</div>
+
                   <div className="text-sm text-slate-400">
                     Status:{" "}
                     <span className="font-semibold text-slate-200">
@@ -537,6 +565,7 @@ export default function MyBookingPage() {
                     </span>
                   </div>
                 </div>
+
                 <StatusPill status={booking.status} />
               </div>
 
@@ -544,6 +573,7 @@ export default function MyBookingPage() {
                 <Button onClick={() => navigate("/app/lockers")}>
                   Reserve another locker
                 </Button>
+
                 <Button variant="secondary" onClick={() => navigate("/app/history")}>
                   View history
                 </Button>
@@ -557,6 +587,7 @@ export default function MyBookingPage() {
                 Cancel booking
               </Button>
             )}
+
             <Button variant="secondary" onClick={() => window.location.reload()}>
               Refresh
             </Button>
