@@ -2,30 +2,38 @@ import { useEffect, useMemo, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useNavigate, useParams } from "react-router-dom";
 import { db } from "../../lib/firebase";
-import { userCompleteBooking, userOpenLocker, userStartProgram } from "../../lib/api";
+import {
+  userCompleteBooking,
+  userOpenLocker,
+  userRequestPayment,
+  userStartProgram,
+} from "../../lib/api";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import Countdown from "../../components/Countdown";
+import StatusPill from "../../components/StatusPill";
 
 type BookingDoc = {
   id?: string;
+  userId?: string;
   lockerId?: string;
   status?: string;
+  serviceType?: string;
+  amountDue?: number;
+  amountPaid?: number;
   paymentConfirmed?: boolean;
   paymentStatus?: string;
-  userControlEnabled?: boolean;
-  adminOverride?: boolean;
-  serviceType?: string;
-  amount?: number;
   selectedModes?: string[];
   sequenceName?: string;
   endAt?: any;
 
+  bookingQrVerified?: boolean;
   helmetDetected?: boolean;
   doorClosed?: boolean;
   programStarted?: boolean;
   programFinished?: boolean;
   programStep?: string;
   programStepEndsAt?: any;
+  retrievalQrGenerated?: boolean;
   retrievalQrVerified?: boolean;
 
   deviceStatus?: {
@@ -36,43 +44,11 @@ type BookingDoc = {
   };
 };
 
-type Preset = {
-  id: "locker_only" | "disinfect" | "combined";
-  title: string;
-  subtitle: string;
-  sequenceName: string;
-  selectedModes: string[];
-};
-
-const PRESETS: Preset[] = [
-  {
-    id: "locker_only",
-    title: "Start Locker Session",
-    subtitle: "Locks the locker for storage only. No cleaning process.",
-    sequenceName: "locker_only",
-    selectedModes: [],
-  },
-  {
-    id: "disinfect",
-    title: "Start Disinfectant",
-    subtitle: "Pump 3 minutes, fan 3 minutes, then UV-C 3 minutes.",
-    sequenceName: "disinfectant",
-    selectedModes: ["mist", "dryer", "uvc"],
-  },
-  {
-    id: "combined",
-    title: "Start Combined Process",
-    subtitle: "Storage plus full cleaning sequence.",
-    sequenceName: "combined",
-    selectedModes: ["mist", "dryer", "uvc"],
-  },
-];
-
 function getServiceLabel(serviceType?: string | null) {
-  if (serviceType === "locker_only") return "Locker Only";
-  if (serviceType === "disinfectant") return "Disinfectant Only";
-  if (serviceType === "combined") return "Combined";
-  return "Locker Service";
+  if (serviceType === "locker_only") return "Locker Mode";
+  if (serviceType === "disinfect_only") return "Disinfect Mode";
+  if (serviceType === "combined") return "Combined Mode";
+  return "Not selected";
 }
 
 function toMs(ts: any): number | null {
@@ -82,34 +58,38 @@ function toMs(ts: any): number | null {
   return null;
 }
 
-function getStepLabel(step?: string) {
-  if (step === "waiting_payment") return "Waiting for payment";
-  if (step === "waiting_helmet") return "Waiting for helmet";
+function getStepLabel(step?: string | null) {
+  if (step === "awaiting_booking_qr") return "Waiting for booking QR";
+  if (step === "choose_mode") return "Choose mode";
+  if (step === "waiting_for_helmet" || step === "waiting_helmet") {
+    return "Waiting for helmet";
+  }
   if (step === "ready_to_start") return "Ready to start";
   if (step === "locker_locked") return "Locker locked";
-  if (step === "mist") return "Pump running";
+  if (step === "mist") return "Mist pump running";
   if (step === "fan") return "Fan running";
   if (step === "uvc") return "UV-C running";
-  if (step === "awaiting_retrieval") return "Awaiting QR retrieval";
-  if (step === "awaiting_open") return "QR verified";
+  if (step === "awaiting_payment") return "Awaiting payment";
+  if (step === "awaiting_retrieval") return "Awaiting retrieval QR";
   if (step === "open") return "Locker opened";
   if (step === "completed") return "Completed";
   return step || "—";
 }
 
-function getCompleteWarning(booking: BookingDoc | null, canUseControls: boolean) {
-  if (!booking) return "Booking information is still loading.";
-  if (!canUseControls) return "Controls are restricted. Make sure the booking is active and paid.";
-  if (booking.retrievalQrVerified !== true) {
-    return "Booking cannot be completed yet. Please scan your QR code first.";
-  }
-  if (booking.programStep !== "open") {
-    return "Booking cannot be completed yet. Please open the locker first.";
-  }
-  if (booking.helmetDetected === true) {
-    return "Helmet is still detected inside the locker. Please retrieve your helmet before completing the booking.";
-  }
-  return null;
+function getStartLabel(serviceType?: string | null) {
+  if (serviceType === "locker_only") return "Start Locker Mode";
+  if (serviceType === "disinfect_only") return "Start Disinfect Mode";
+  if (serviceType === "combined") return "Start Combined Mode";
+  return "Start";
+}
+
+function canUseProcess(status?: string | null) {
+  return (
+    status === "mode_selected" ||
+    status === "waiting_for_helmet" ||
+    status === "in_use" ||
+    status === "disinfecting"
+  );
 }
 
 export default function UserControlPanelPage() {
@@ -118,7 +98,8 @@ export default function UserControlPanelPage() {
 
   const [booking, setBooking] = useState<BookingDoc | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busyPreset, setBusyPreset] = useState<string | null>(null);
+  const [busyStart, setBusyStart] = useState(false);
+  const [busyPayment, setBusyPayment] = useState(false);
   const [busyOpen, setBusyOpen] = useState(false);
   const [busyComplete, setBusyComplete] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -139,11 +120,7 @@ export default function UserControlPanelPage() {
           return;
         }
 
-        setBooking({
-          id: snap.id,
-          ...(snap.data() as BookingDoc),
-        });
-
+        setBooking({ id: snap.id, ...(snap.data() as BookingDoc) });
         setLoading(false);
       },
       (e) => {
@@ -155,57 +132,51 @@ export default function UserControlPanelPage() {
     return () => unsub();
   }, [bookingId]);
 
-  const paymentConfirmed = useMemo(() => {
-    return booking?.paymentConfirmed === true || booking?.paymentStatus === "paid";
-  }, [booking]);
+  const stepEndsAtMs = useMemo(
+    () => toMs(booking?.programStepEndsAt),
+    [booking?.programStepEndsAt]
+  );
 
-  const canUseControls = useMemo(() => {
-    return (
-      booking?.status === "active" &&
-      paymentConfirmed &&
-      booking?.userControlEnabled === true &&
-      booking?.adminOverride !== true
-    );
-  }, [booking, paymentConfirmed]);
-
-  const availablePresets = useMemo(() => {
-    const serviceType = booking?.serviceType;
-
-    if (serviceType === "locker_only") return PRESETS.filter((p) => p.id === "locker_only");
-    if (serviceType === "disinfectant") return PRESETS.filter((p) => p.id === "disinfect");
-    if (serviceType === "combined") return PRESETS.filter((p) => p.id === "combined");
-
-    return [];
-  }, [booking]);
-
-  const stepEndsAtMs = useMemo(() => toMs(booking?.programStepEndsAt), [booking?.programStepEndsAt]);
   const endAtMs = useMemo(() => toMs(booking?.endAt), [booking?.endAt]);
 
+  const amountDue = typeof booking?.amountDue === "number" ? booking.amountDue : 0;
+  const amountPaid =
+    typeof booking?.amountPaid === "number" ? booking.amountPaid : 0;
+
+  const paymentConfirmed =
+    booking?.paymentConfirmed === true || booking?.paymentStatus === "paid";
+
+  const modeSelected =
+    !!booking?.serviceType &&
+    booking.status !== "awaiting_booking_qr" &&
+    booking.status !== "confirmed";
+
   const canStartProgram =
-    canUseControls &&
+    canUseProcess(booking?.status) &&
+    modeSelected &&
     booking?.helmetDetected === true &&
     booking?.doorClosed === true &&
-    booking?.programStarted !== true &&
-    booking?.programStep !== "locker_locked";
+    booking?.programStarted !== true;
+
+  const canProceedToPayment =
+    booking?.status === "in_use" &&
+    booking?.serviceType === "locker_only" &&
+    booking?.programStarted === true &&
+    paymentConfirmed !== true;
 
   const canOpen =
-    canUseControls &&
+    booking?.status === "retrieval_verified" &&
     booking?.retrievalQrVerified === true &&
-    booking?.programStep !== "open" &&
-    booking?.status === "active";
+    booking?.programStep !== "open";
 
   const canComplete =
-    canUseControls &&
     booking?.retrievalQrVerified === true &&
     booking?.programStep === "open" &&
     booking?.helmetDetected === false &&
-    booking?.status === "active";
+    booking?.status === "retrieval_verified";
 
-  const completeWarning = getCompleteWarning(booking, canUseControls);
-
-  async function startPreset(preset: Preset) {
+  async function startProgram() {
     if (!bookingId || !booking) return;
-    if (!canUseControls) return;
 
     if (booking.helmetDetected !== true) {
       setErr("Helmet is not detected yet. Place the helmet inside the locker first.");
@@ -213,26 +184,38 @@ export default function UserControlPanelPage() {
     }
 
     if (booking.doorClosed !== true) {
-      setErr("Please close the locker door before starting the program.");
+      setErr("Please close the locker door before starting the selected mode.");
       return;
     }
 
     try {
-      setBusyPreset(preset.id);
+      setBusyStart(true);
       setErr(null);
       setOkMsg(null);
 
-      await userStartProgram({
-        bookingId,
-        selectedModes: preset.selectedModes,
-        sequenceName: preset.sequenceName,
-      });
-
-      setOkMsg(`${preset.title} started.`);
+      await userStartProgram({ bookingId });
+      setOkMsg(`${getStartLabel(booking.serviceType)} started.`);
     } catch (e: any) {
       setErr(e.message ?? String(e));
     } finally {
-      setBusyPreset(null);
+      setBusyStart(false);
+    }
+  }
+
+  async function requestPayment() {
+    if (!bookingId) return;
+
+    try {
+      setBusyPayment(true);
+      setErr(null);
+      setOkMsg(null);
+
+      await userRequestPayment({ bookingId });
+      setOkMsg("Payment step enabled. Please insert coins in the coin slot.");
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setBusyPayment(false);
     }
   }
 
@@ -245,7 +228,7 @@ export default function UserControlPanelPage() {
       setOkMsg(null);
 
       await userOpenLocker({ bookingId });
-      setOkMsg("Locker open command sent. Please retrieve your helmet before completing the booking.");
+      setOkMsg("Locker open command sent. Retrieve the helmet before completing the booking.");
     } catch (e: any) {
       setErr(e.message ?? String(e));
     } finally {
@@ -254,27 +237,15 @@ export default function UserControlPanelPage() {
   }
 
   async function completeBooking() {
-    if (!bookingId || !booking) return;
-
-    const warning = getCompleteWarning(booking, canUseControls);
-    if (warning) {
-      setErr(warning);
-      setOkMsg(null);
-      return;
-    }
+    if (!bookingId) return;
 
     try {
       setBusyComplete(true);
       setErr(null);
       setOkMsg(null);
 
-      await userCompleteBooking({
-        bookingId,
-        selectedModes: booking.selectedModes ?? [],
-        sequenceName: booking.sequenceName ?? "custom",
-      });
-
-      setOkMsg("Booking completed. Your locker will be released.");
+      await userCompleteBooking({ bookingId });
+      setOkMsg("Booking completed. Locker released.");
       navigate("/app/booking");
     } catch (e: any) {
       setErr(e.message ?? String(e));
@@ -305,7 +276,9 @@ export default function UserControlPanelPage() {
         <CardBody>
           <div className="text-sm text-red-300">{err ?? "Booking not found."}</div>
           <div className="mt-4">
-            <Button onClick={() => navigate("/app/booking")}>Back to My Booking</Button>
+            <Button onClick={() => navigate("/app/booking")}>
+              Back to My Booking
+            </Button>
           </div>
         </CardBody>
       </Card>
@@ -313,9 +286,12 @@ export default function UserControlPanelPage() {
   }
 
   const serviceLabel = getServiceLabel(booking.serviceType);
-  const amount = typeof booking.amount === "number" ? booking.amount : 25;
   const programStep = booking.programStep ?? "—";
-  const showLockerTimer = booking.serviceType === "locker_only" || booking.serviceType === "combined";
+
+  const showLockerTimer =
+    (booking.serviceType === "locker_only" ||
+      booking.serviceType === "combined") &&
+    endAtMs;
 
   return (
     <div className="space-y-4">
@@ -325,13 +301,11 @@ export default function UserControlPanelPage() {
             <div>
               <div className="text-lg font-bold">Locker Control Panel</div>
               <div className="text-sm text-slate-400">
-                Start the session, scan QR for retrieval, open the locker, retrieve the helmet, then complete the booking.
+                Start the selected mode, proceed to payment, scan retrieval QR,
+                then release the locker.
               </div>
             </div>
-
-            <Badge color={canUseControls ? "green" : "yellow"}>
-              {canUseControls ? "Access Enabled" : "Restricted"}
-            </Badge>
+            <StatusPill status={booking.status} />
           </div>
         </CardHeader>
 
@@ -351,21 +325,23 @@ export default function UserControlPanelPage() {
             </div>
 
             <div>
-              <div className="text-sm text-slate-400">Service</div>
+              <div className="text-sm text-slate-400">Mode</div>
               <div className="font-semibold">{serviceLabel}</div>
             </div>
 
             <div>
-              <div className="text-sm text-slate-400">Amount Paid</div>
-              <div className="font-semibold">₱{amount}</div>
+              <div className="text-sm text-slate-400">Amount</div>
+              <div className="font-semibold">
+                ₱{amountPaid} / ₱{amountDue}
+              </div>
             </div>
           </div>
 
-          {showLockerTimer && endAtMs && (
+          {showLockerTimer && (
             <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
               <div className="text-sm text-blue-100">Locker time remaining</div>
               <div className="mt-2 text-3xl font-extrabold text-white">
-                <Countdown targetMs={endAtMs} />
+                <Countdown targetMs={endAtMs!} />
               </div>
             </div>
           )}
@@ -391,7 +367,7 @@ export default function UserControlPanelPage() {
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-              <div className="text-xs text-slate-400">QR Verification</div>
+              <div className="text-xs text-slate-400">Retrieval QR</div>
               <div className="mt-1 font-semibold">
                 {booking.retrievalQrVerified ? "Verified" : "Not verified"}
               </div>
@@ -409,7 +385,7 @@ export default function UserControlPanelPage() {
 
           <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <div>
-              <div className="font-semibold">Start process</div>
+              <div className="font-semibold">Start selected mode</div>
               <div className="mt-1 text-sm text-slate-400">
                 Place the helmet inside and close the door before pressing Start.
               </div>
@@ -423,41 +399,61 @@ export default function UserControlPanelPage() {
 
             {booking.helmetDetected && !booking.doorClosed && (
               <div className="mt-3 rounded-xl border border-orange-500/40 bg-orange-500/10 p-3 text-sm text-orange-200">
-                Helmet detected. Please close the locker door before starting the program.
+                Helmet detected. Please close the locker door before starting.
               </div>
             )}
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {availablePresets.map((preset) => (
-                <div key={preset.id} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                  <div className="font-semibold">{preset.title}</div>
-                  <div className="mt-1 text-sm text-slate-400">{preset.subtitle}</div>
+            <div className="mt-4 flex flex-col gap-2 md:flex-row">
+              <Button disabled={!canStartProgram || busyStart} onClick={startProgram}>
+                {busyStart ? "Starting..." : getStartLabel(booking.serviceType)}
+              </Button>
 
-                  <div className="mt-4">
-                    <Button
-                      className="w-full"
-                      disabled={!canStartProgram || busyPreset !== null}
-                      onClick={() => startPreset(preset)}
-                    >
-                      {busyPreset === preset.id ? "Starting..." : preset.title}
-                    </Button>
-                  </div>
-                </div>
-              ))}
+              {canProceedToPayment && (
+                <Button
+                  variant="secondary"
+                  disabled={busyPayment}
+                  onClick={requestPayment}
+                >
+                  {busyPayment ? "Preparing..." : "Proceed to Payment"}
+                </Button>
+              )}
             </div>
           </div>
 
           <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <div>
-              <div className="font-semibold">Retrieve helmet</div>
+              <div className="font-semibold">Payment and retrieval</div>
               <div className="mt-1 text-sm text-slate-400">
-                Scan your personal QR using the ESP32-CAM. After QR verification, press Open Locker and retrieve your helmet.
+                After payment, scan the newly generated retrieval QR. The locker
+                unlocks only after retrieval QR verification.
               </div>
             </div>
 
-            {completeWarning && (
+            {booking.status === "awaiting_payment" && (
               <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
-                {completeWarning}
+                Insert coins until the amount reaches ₱{amountDue}. Current
+                recorded payment: ₱{amountPaid}.
+              </div>
+            )}
+
+            {booking.status === "awaiting_retrieval_qr" && (
+              <div className="mt-3 rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-3 text-sm text-cyan-200">
+                Payment is complete. Go back to My Booking and scan the retrieval
+                QR shown there.
+              </div>
+            )}
+
+            {booking.status === "retrieval_verified" &&
+              booking.programStep !== "open" && (
+                <div className="mt-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+                  Retrieval QR is verified. The device should unlock automatically.
+                  Use Open Locker if a manual command is needed.
+                </div>
+              )}
+
+            {booking.programStep === "open" && booking.helmetDetected !== false && (
+              <div className="mt-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                Locker is open. Remove the helmet before completing the booking.
               </div>
             )}
 
@@ -481,6 +477,24 @@ export default function UserControlPanelPage() {
               <Button variant="secondary" onClick={() => window.location.reload()}>
                 Refresh
               </Button>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div className="font-semibold">Device output status</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge color={booking.deviceStatus?.lock ? "amber" : "green"}>
+                Lock: {booking.deviceStatus?.lock ? "Locked" : "Unlocked"}
+              </Badge>
+              <Badge color={booking.deviceStatus?.mist ? "green" : "slate"}>
+                Mist: {booking.deviceStatus?.mist ? "ON" : "OFF"}
+              </Badge>
+              <Badge color={booking.deviceStatus?.fan ? "green" : "slate"}>
+                Fan: {booking.deviceStatus?.fan ? "ON" : "OFF"}
+              </Badge>
+              <Badge color={booking.deviceStatus?.uvc ? "green" : "slate"}>
+                UV-C: {booking.deviceStatus?.uvc ? "ON" : "OFF"}
+              </Badge>
             </div>
           </div>
         </CardBody>
