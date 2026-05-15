@@ -14,45 +14,24 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-
 const app = express();
+
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "1mb" }));
 
-// =====================================================
-// ENV SETTINGS
-// =====================================================
-const QR_SECRET = process.env.QR_SECRET?.trim() || "dev-secret";
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY?.trim() || "dev-device-key";
-
 const UNLOCK_MS = 5000;
 
-// For thesis demo:
-// mist = mini pump
 const DEFAULT_MIST_SEC = Number(process.env.MIST_SECONDS || 10);
-const DEFAULT_DRYER_SEC = Number(process.env.DRYER_SECONDS || 30);
+const DEFAULT_FAN_SEC = Number(
+  process.env.FAN_SECONDS || process.env.DRYER_SECONDS || 30
+);
 const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 30);
 
-// =====================================================
-// HELPERS
-// =====================================================
+type QrPurpose = "booking" | "retrieval";
+
 function tsPlusMs(ts: admin.firestore.Timestamp, ms: number) {
   return admin.firestore.Timestamp.fromMillis(ts.toMillis() + ms);
-}
-
-function sha256Hex(input: string) {
-  return crypto.createHash("sha256").update(input).digest("hex");
-}
-
-function safeEq(a?: string, b?: string) {
-  if (!a || !b) return false;
-
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-
-  if (ab.length !== bb.length) return false;
-
-  return crypto.timingSafeEqual(ab, bb);
 }
 
 function requireDeviceKey(req: express.Request) {
@@ -60,23 +39,14 @@ function requireDeviceKey(req: express.Request) {
   const bearer = (req.get("authorization") || "").toString();
 
   const token =
-    header ||
-    (bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length) : "");
+    header || (bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length) : "");
 
   if (!token) {
-    return {
-      ok: false as const,
-      status: 401,
-      error: "MISSING_DEVICE_KEY",
-    };
+    return { ok: false as const, status: 401, error: "MISSING_DEVICE_KEY" };
   }
 
   if (token !== DEVICE_API_KEY) {
-    return {
-      ok: false as const,
-      status: 403,
-      error: "INVALID_DEVICE_KEY",
-    };
+    return { ok: false as const, status: 403, error: "INVALID_DEVICE_KEY" };
   }
 
   return { ok: true as const };
@@ -89,50 +59,60 @@ async function requireUserAuth(req: express.Request) {
     : "";
 
   if (!token) {
-    return {
-      ok: false as const,
-      status: 401,
-      error: "MISSING_AUTH_TOKEN",
-    };
+    return { ok: false as const, status: 401, error: "MISSING_AUTH_TOKEN" };
   }
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-
-    return {
-      ok: true as const,
-      uid: decoded.uid,
-    };
+    return { ok: true as const, uid: decoded.uid };
   } catch {
-    return {
-      ok: false as const,
-      status: 401,
-      error: "INVALID_AUTH_TOKEN",
-    };
+    return { ok: false as const, status: 401, error: "INVALID_AUTH_TOKEN" };
   }
 }
 
-function parseQrPayload(body: any) {
+function parseQrPayload(body: any): {
+  type: QrPurpose;
+  bookingId?: string;
+  lockerId?: string;
+  token?: string;
+} {
   if (body.qrPayload && typeof body.qrPayload === "string") {
     const raw = body.qrPayload.trim();
 
-    // New short QR format:
-    // HALO|bookingId|lockerId|token
-    if (raw.startsWith("HALO|")) {
+    if (raw.startsWith("HALO_BOOK|")) {
       const parts = raw.split("|");
-
       return {
+        type: "booking",
         bookingId: parts[1],
         lockerId: parts[2],
         token: parts[3],
       };
     }
 
-    // Old JSON QR format support:
-    // {"v":1,"type":"claim","bookingId":"...","lockerId":"...","token":"..."}
+    if (raw.startsWith("HALO_RETRIEVE|")) {
+      const parts = raw.split("|");
+      return {
+        type: "retrieval",
+        bookingId: parts[1],
+        lockerId: parts[2],
+        token: parts[3],
+      };
+    }
+
+    if (raw.startsWith("HALO|")) {
+      const parts = raw.split("|");
+      return {
+        type: body.type === "booking" ? "booking" : "retrieval",
+        bookingId: parts[1],
+        lockerId: parts[2],
+        token: parts[3],
+      };
+    }
+
     const parsed = JSON.parse(raw);
 
     return {
+      type: parsed.type === "booking" ? "booking" : "retrieval",
       bookingId: parsed.bookingId,
       lockerId: parsed.lockerId,
       token: parsed.token,
@@ -140,6 +120,7 @@ function parseQrPayload(body: any) {
   }
 
   return {
+    type: body.type === "booking" ? "booking" : "retrieval",
     bookingId: body.bookingId,
     lockerId: body.lockerId,
     token: body.token,
@@ -148,90 +129,83 @@ function parseQrPayload(body: any) {
 
 function deviceStatusForStep(step: string) {
   if (step === "mist") {
-    return {
-      lock: true,
-      mist: true,
-      fan: false,
-      uvc: false,
-    };
+    return { lock: true, mist: true, fan: false, uvc: false };
   }
 
-  if (step === "fan" || step === "dryer") {
-    return {
-      lock: true,
-      mist: false,
-      fan: true,
-      uvc: false,
-    };
+  if (step === "fan") {
+    return { lock: true, mist: false, fan: true, uvc: false };
   }
 
   if (step === "uvc") {
-    return {
-      lock: true,
-      mist: false,
-      fan: false,
-      uvc: true,
-    };
+    return { lock: true, mist: false, fan: false, uvc: true };
   }
 
-  return {
-    lock: true,
-    mist: false,
-    fan: false,
-    uvc: false,
-  };
+  if (step === "open") {
+    return { lock: false, mist: false, fan: false, uvc: false };
+  }
+
+  return { lock: true, mist: false, fan: false, uvc: false };
 }
 
 function stepSeconds(step: string) {
   if (step === "mist") return DEFAULT_MIST_SEC;
-  if (step === "fan" || step === "dryer") return DEFAULT_DRYER_SEC;
+  if (step === "fan") return DEFAULT_FAN_SEC;
   if (step === "uvc") return DEFAULT_UV_SEC;
-
   return 0;
 }
 
-// =====================================================
-// HEALTH
-// =====================================================
+function amountForService(serviceType: string) {
+  if (serviceType === "combined") return 30;
+  return 25;
+}
+
+function selectedModesForService(serviceType: string) {
+  if (serviceType === "locker_only") return ["locker"];
+  if (serviceType === "disinfect_only") return ["mist", "fan", "uvc"];
+  if (serviceType === "combined") return ["locker", "mist", "fan", "uvc"];
+  return [];
+}
+
+async function writeLog(input: {
+  type: string;
+  message: string;
+  lockerId?: string | null;
+  bookingId?: string | null;
+  userId?: string | null;
+  payload?: any;
+}) {
+  await db.collection("logs").add({
+    ...input,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
 app.get("/", (_req, res) => {
-  res.status(200).send("HALO Railway backend is running");
+  res.status(200).send("HALO backend is running with new booking-first flow.");
 });
 
 app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
-// =====================================================
-// DEVICE: LOCKER STATUS
-// Main ESP32 calls this repeatedly.
-// =====================================================
 app.get("/api/device/lockerStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
   try {
     const lockerId = String(req.query.lockerId || "").trim();
 
     if (!lockerId) {
-      return res.status(400).json({
-        ok: false,
-        error: "MISSING_LOCKER_ID",
-      });
+      return res.status(400).json({ ok: false, error: "MISSING_LOCKER_ID" });
     }
 
     const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "LOCKER_NOT_FOUND",
-      });
+      return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
     }
 
     const locker = lockerSnap.data() as any;
@@ -261,9 +235,14 @@ app.get("/api/device/lockerStatus", async (req, res) => {
 
       bookingId: booking?.id ?? null,
       bookingStatus: booking?.status ?? null,
-      amountDue: Number(booking?.amount ?? 0),
       serviceType: booking?.serviceType ?? null,
+      selectedModes: booking?.selectedModes ?? [],
+      amountDue: Number(booking?.amountDue ?? 0),
+      amountPaid: Number(booking?.amountPaid ?? 0),
+      paymentStatus: booking?.paymentStatus ?? null,
+      paymentConfirmed: !!booking?.paymentConfirmed,
 
+      bookingQrVerified: !!booking?.bookingQrVerified,
       helmetDetected: !!booking?.helmetDetected,
       doorClosed: !!booking?.doorClosed,
       programStarted: !!booking?.programStarted,
@@ -271,10 +250,11 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       programStep: booking?.programStep ?? null,
       programStepEndsAt: booking?.programStepEndsAt?.toMillis?.() ?? null,
       programRunId: booking?.programRunId ?? null,
+      retrievalQrGenerated: !!booking?.retrievalQrGenerated,
       retrievalQrVerified: !!booking?.retrievalQrVerified,
 
       control: {
-        lock: !!booking?.deviceStatus?.lock,
+        lock: booking?.deviceStatus?.lock !== false,
         mist: !!booking?.deviceStatus?.mist,
         fan: !!booking?.deviceStatus?.fan,
         uvc: !!booking?.deviceStatus?.uvc,
@@ -291,158 +271,107 @@ app.get("/api/device/lockerStatus", async (req, res) => {
   }
 });
 
-// =====================================================
-// DEVICE: CONFIRM CASH PAYMENT
-// Main ESP32 calls this after enough coins are inserted.
-// =====================================================
-app.post("/api/confirmPayment", async (req, res) => {
+app.post("/api/device/verifyQr", async (req, res) => {
   const auth = requireDeviceKey(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
-  }
-
-  const { lockerId, deviceId, paymentPayload, provider, amountPaid } =
-    req.body as {
-      lockerId?: string;
-      deviceId?: string;
-      paymentPayload?: string;
-      provider?: string;
-      amountPaid?: number;
-    };
-
-  if (!lockerId || !paymentPayload) {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_FIELDS",
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
   try {
+    const { type, bookingId, lockerId, token } = parseQrPayload(req.body);
+
+    if (!bookingId || !lockerId || !token) {
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    }
+
+    const bookingRef = db.doc(`bookings/${bookingId}`);
     const lockerRef = db.doc(`lockers/${lockerId}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const lockerSnap = await tx.get(lockerRef);
-
-      if (!lockerSnap.exists) {
-        return {
-          ok: false as const,
-          error: "LOCKER_NOT_FOUND",
-        };
-      }
-
-      const locker = lockerSnap.data() as any;
-      const bookingId = locker.currentBookingId as string | undefined;
-
-      if (!bookingId) {
-        return {
-          ok: false as const,
-          error: "NO_ACTIVE_BOOKING",
-        };
-      }
-
-      const bookingRef = db.doc(`bookings/${bookingId}`);
-      const bookingSnap = await tx.get(bookingRef);
+      const [bookingSnap, lockerSnap] = await Promise.all([
+        tx.get(bookingRef),
+        tx.get(lockerRef),
+      ]);
 
       if (!bookingSnap.exists) {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_FOUND",
-        };
+        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+      }
+
+      if (!lockerSnap.exists) {
+        return { ok: false as const, error: "LOCKER_NOT_FOUND" };
       }
 
       const booking = bookingSnap.data() as any;
+      const locker = lockerSnap.data() as any;
 
-      if (booking.status !== "pending_payment") {
-        return {
-          ok: false as const,
-          error: "NOT_AWAITING_PAYMENT",
-        };
+      if (booking.lockerId !== lockerId) {
+        return { ok: false as const, error: "LOCKER_MISMATCH" };
       }
 
-      const holdMs = booking.holdExpiresAt?.toMillis?.() as number | undefined;
+      if (locker.currentBookingId !== bookingId) {
+        return { ok: false as const, error: "LOCKER_NOT_ASSIGNED_TO_BOOKING" };
+      }
 
-      if (typeof holdMs === "number" && Date.now() > holdMs) {
+      if (type === "booking") {
+        if (booking.status !== "awaiting_booking_qr") {
+          return { ok: false as const, error: "BOOKING_QR_NOT_ALLOWED" };
+        }
+
+        if (token !== booking.userId && token !== bookingId) {
+          return { ok: false as const, error: "INVALID_BOOKING_QR" };
+        }
+
         tx.update(bookingRef, {
-          status: "expired",
-          expiredAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: "confirmed",
+          bookingQrVerified: true,
+          bookingQrVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+          programStep: "choose_mode",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          deviceStatus: {
+            lock: false,
+            mist: false,
+            fan: false,
+            uvc: false,
+          },
         });
 
         tx.update(lockerRef, {
-          status: "available",
-          occupied: false,
-          currentBookingId: null,
+          status: "confirmed",
+          occupied: true,
           pendingPayment: false,
-          pendingPaymentExpiresAt: null,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
         return {
-          ok: false as const,
-          error: "PAYMENT_WINDOW_EXPIRED",
+          ok: true as const,
+          action: "BOOKING_QR_VERIFIED",
+          unlockMs: UNLOCK_MS,
+          bookingId,
+          lockerId,
         };
       }
 
-      const requiredAmount = Number(booking.amount ?? 25);
-      const paid = Number(amountPaid ?? 0);
-
-      if (!Number.isFinite(paid) || paid < requiredAmount) {
-        return {
-          ok: false as const,
-          error: "INSUFFICIENT_PAYMENT",
-          requiredAmount,
-          amountPaid: paid,
-        };
+      if (booking.status !== "awaiting_retrieval_qr") {
+        return { ok: false as const, error: "RETRIEVAL_QR_NOT_ALLOWED" };
       }
 
-      const now = admin.firestore.Timestamp.now();
-      const durationMin = Number(booking.durationMin ?? 600);
-      const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
+      if (booking.paymentConfirmed !== true && booking.paymentStatus !== "paid") {
+        return { ok: false as const, error: "PAYMENT_NOT_CONFIRMED" };
+      }
 
-      const paymentRef = db.collection("payments").doc();
+      const expectedToken = booking.retrievalQrToken ?? bookingId;
 
-      tx.set(paymentRef, {
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        userId: booking.userId ?? null,
-        bookingId,
-        lockerId,
-        provider: provider ?? "cash",
-        rawPayload: paymentPayload,
-        status: "paid",
-        deviceId: deviceId ?? null,
-        amountPaid: paid,
-        requiredAmount,
-      });
+      if (token !== expectedToken) {
+        return { ok: false as const, error: "INVALID_RETRIEVAL_QR" };
+      }
 
       tx.update(bookingRef, {
-        status: "active",
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        paymentId: paymentRef.id,
-        holdExpiresAt: null,
-        activeAt: admin.firestore.FieldValue.serverTimestamp(),
-        endAt,
-
-        paymentConfirmed: true,
-        paymentStatus: "paid",
-        userControlEnabled: true,
-        adminOverride: false,
-        paymentProvider: provider ?? "cash",
-        paymentPayload,
-
-        helmetDetected: false,
-
-        // Door sensor is skipped.
-        doorClosed: true,
-
-        programStarted: false,
-        programFinished: false,
-        programStep: "waiting_helmet",
-        programStepEndsAt: null,
-        retrievalQrVerified: false,
-
+        status: "retrieval_verified",
+        retrievalQrVerified: true,
+        retrievalQrVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        programStep: "open",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         deviceStatus: {
           lock: false,
           mist: false,
@@ -452,22 +381,18 @@ app.post("/api/confirmPayment", async (req, res) => {
       });
 
       tx.update(lockerRef, {
-        status: "active",
+        status: "awaiting_retrieval",
+        occupied: true,
         pendingPayment: false,
-        pendingPaymentExpiresAt: null,
-        lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
-        currentBookingId: bookingId,
-        occupied: false,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       return {
         ok: true as const,
-        bookingId,
+        action: "RETRIEVAL_QR_VERIFIED",
         unlockMs: UNLOCK_MS,
-        requiredAmount,
-        amountPaid: paid,
-        endsAt: endAt.toMillis(),
+        bookingId,
+        lockerId,
       };
     });
 
@@ -475,17 +400,16 @@ app.post("/api/confirmPayment", async (req, res) => {
       return res.status(400).json(result);
     }
 
-    return res.json({
-      ok: true,
-      action: "UNLOCK",
+    await writeLog({
+      type: "QR",
+      message: result.action,
+      lockerId: result.lockerId,
       bookingId: result.bookingId,
-      unlockMs: result.unlockMs,
-      requiredAmount: result.requiredAmount,
-      amountPaid: result.amountPaid,
-      endsAt: result.endsAt,
-    });
+    }).catch(() => {});
+
+    return res.json(result);
   } catch (err: any) {
-    console.error("confirmPayment error", err);
+    console.error("verifyQr error", err);
 
     return res.status(500).json({
       ok: false,
@@ -495,18 +419,11 @@ app.post("/api/confirmPayment", async (req, res) => {
   }
 });
 
-// =====================================================
-// DEVICE: SENSOR STATUS
-// Main ESP32 reports helmet sensor status.
-// =====================================================
 app.post("/api/device/sensorStatus", async (req, res) => {
   const auth = requireDeviceKey(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
   const { lockerId, bookingId, helmetDetected, doorClosed } = req.body as {
@@ -517,45 +434,31 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   };
 
   if (!lockerId || typeof helmetDetected !== "boolean") {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_FIELDS",
-    });
+    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   }
 
   try {
     const lockerSnap = await db.doc(`lockers/${lockerId}`).get();
 
     if (!lockerSnap.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "LOCKER_NOT_FOUND",
-      });
+      return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
     }
 
     const locker = lockerSnap.data() as any;
     const activeBookingId = bookingId || locker.currentBookingId;
 
     if (!activeBookingId) {
-      return res.status(400).json({
-        ok: false,
-        error: "NO_ACTIVE_BOOKING",
-      });
+      return res.status(400).json({ ok: false, error: "NO_ACTIVE_BOOKING" });
     }
 
     const bookingRef = db.doc(`bookings/${activeBookingId}`);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "BOOKING_NOT_FOUND",
-      });
+      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
     }
 
     const booking = bookingSnap.data() as any;
-
-    // Door sensor removed/skipped.
     const safeDoorClosed = typeof doorClosed === "boolean" ? doorClosed : true;
 
     const patch: Record<string, any> = {
@@ -568,10 +471,19 @@ app.post("/api/device/sensorStatus", async (req, res) => {
         ? admin.firestore.FieldValue.serverTimestamp()
         : null,
       lastDeviceUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    if (booking.status === "active" && booking.programStarted !== true) {
-      patch.programStep = helmetDetected ? "ready_to_start" : "waiting_helmet";
+    if (
+      booking.status === "mode_selected" ||
+      booking.status === "waiting_for_helmet"
+    ) {
+      patch.status = helmetDetected && safeDoorClosed ? "mode_selected" : "waiting_for_helmet";
+      patch.programStep = helmetDetected && safeDoorClosed ? "ready_to_start" : "waiting_for_helmet";
+    }
+
+    if (booking.status === "retrieval_verified" && helmetDetected === false) {
+      patch.programStep = "open";
     }
 
     await bookingRef.update(patch);
@@ -593,31 +505,17 @@ app.post("/api/device/sensorStatus", async (req, res) => {
   }
 });
 
-// =====================================================
-// USER: START PROGRAM
-// App calls this when user presses Start.
-// =====================================================
 app.post("/api/user/startProgram", async (req, res) => {
   const auth = await requireUserAuth(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
-  const { bookingId, sequenceName } = req.body as {
-    bookingId?: string;
-    selectedModes?: string[];
-    sequenceName?: string;
-  };
+  const { bookingId } = req.body as { bookingId?: string };
 
   if (!bookingId) {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_FIELDS",
-    });
+    return res.status(400).json({ ok: false, error: "MISSING_BOOKING_ID" });
   }
 
   try {
@@ -627,76 +525,86 @@ app.post("/api/user/startProgram", async (req, res) => {
       const bookingSnap = await tx.get(bookingRef);
 
       if (!bookingSnap.exists) {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_FOUND",
-        };
+        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
       }
 
       const booking = bookingSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
-        return {
-          ok: false as const,
-          error: "FORBIDDEN",
-        };
+        return { ok: false as const, error: "FORBIDDEN" };
       }
 
-      if (booking.status !== "active") {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_ACTIVE",
-        };
+      if (
+        booking.status !== "mode_selected" &&
+        booking.status !== "waiting_for_helmet"
+      ) {
+        return { ok: false as const, error: "BOOKING_NOT_READY" };
       }
 
-      if (booking.paymentConfirmed !== true && booking.paymentStatus !== "paid") {
-        return {
-          ok: false as const,
-          error: "PAYMENT_NOT_CONFIRMED",
-        };
+      if (booking.bookingQrVerified !== true) {
+        return { ok: false as const, error: "BOOKING_QR_NOT_VERIFIED" };
       }
 
-      if (booking.programStarted === true) {
-        return {
-          ok: false as const,
-          error: "PROGRAM_ALREADY_STARTED",
-        };
+      if (!booking.serviceType) {
+        return { ok: false as const, error: "SERVICE_NOT_SELECTED" };
       }
 
       if (booking.helmetDetected !== true) {
-        return {
-          ok: false as const,
-          error: "HELMET_NOT_DETECTED",
-        };
+        return { ok: false as const, error: "HELMET_NOT_DETECTED" };
+      }
+
+      if (booking.doorClosed !== true) {
+        return { ok: false as const, error: "DOOR_NOT_CLOSED" };
+      }
+
+      if (booking.programStarted === true) {
+        return { ok: false as const, error: "PROGRAM_ALREADY_STARTED" };
       }
 
       const lockerId = booking.lockerId as string | undefined;
 
       if (!lockerId) {
-        return {
-          ok: false as const,
-          error: "INVALID_BOOKING",
-        };
+        return { ok: false as const, error: "INVALID_BOOKING" };
       }
 
-      const serviceType = booking.serviceType ?? "locker_only";
+      const serviceType = booking.serviceType as string;
+      const amountDue = Number(booking.amountDue ?? amountForService(serviceType));
+      const durationMin = Number(booking.durationMin ?? 600);
+      const now = admin.firestore.Timestamp.now();
 
-      // Locker only: lock the locker, no cleaning process.
+      const commonPatch: Record<string, any> = {
+        programStarted: true,
+        programStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        amountDue,
+        selectedModes: selectedModesForService(serviceType),
+        sequenceName: serviceType,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
       if (serviceType === "locker_only") {
+        const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
+
         tx.update(bookingRef, {
-          programStarted: true,
+          ...commonPatch,
+          status: "in_use",
           programFinished: true,
+          programFinishedAt: admin.firestore.FieldValue.serverTimestamp(),
           programStep: "locker_locked",
           programStepEndsAt: null,
-          selectedModes: [],
-          sequenceName: "locker_only",
+          endAt,
           deviceStatus: {
             lock: true,
             mist: false,
             fan: false,
             uvc: false,
           },
-          startedByUserAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.update(db.doc(`lockers/${lockerId}`), {
+          status: "in_use",
+          occupied: true,
+          pendingPayment: false,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
         return {
@@ -707,27 +615,29 @@ app.post("/api/user/startProgram", async (req, res) => {
         };
       }
 
-      // Disinfectant or combined:
-      // Start pump/mist first.
       const programRunId = crypto.randomUUID();
-      const now = admin.firestore.Timestamp.now();
       const stepEndsAt = tsPlusMs(now, stepSeconds("mist") * 1000);
 
       tx.update(bookingRef, {
-        programStarted: true,
+        ...commonPatch,
+        status: "disinfecting",
         programFinished: false,
         programRunId,
         programStep: "mist",
         programStepEndsAt: stepEndsAt,
-        selectedModes: ["mist", "dryer", "uvc"],
-        sequenceName: serviceType === "combined" ? "combined" : "disinfectant",
         deviceStatus: {
           lock: true,
           mist: true,
           fan: false,
           uvc: false,
         },
-        startedByUserAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      tx.update(db.doc(`lockers/${lockerId}`), {
+        status: "disinfecting",
+        occupied: true,
+        pendingPayment: false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       tx.set(db.collection("deviceCommands").doc(`program_${bookingId}`), {
@@ -738,26 +648,11 @@ app.post("/api/user/startProgram", async (req, res) => {
         payload: {
           bookingId,
           programRunId,
-          sequenceName: sequenceName ?? serviceType,
+          sequenceName: serviceType,
           steps: [
-            {
-              id: "mist",
-              label: "Pump",
-              order: 0,
-              seconds: DEFAULT_MIST_SEC,
-            },
-            {
-              id: "fan",
-              label: "Fan",
-              order: 1,
-              seconds: DEFAULT_DRYER_SEC,
-            },
-            {
-              id: "uvc",
-              label: "UV-C",
-              order: 2,
-              seconds: DEFAULT_UV_SEC,
-            },
+            { id: "mist", label: "Mist Pump", order: 0, seconds: DEFAULT_MIST_SEC },
+            { id: "fan", label: "Fan", order: 1, seconds: DEFAULT_FAN_SEC },
+            { id: "uvc", label: "UV-C", order: 2, seconds: DEFAULT_UV_SEC },
           ],
         },
       });
@@ -787,18 +682,11 @@ app.post("/api/user/startProgram", async (req, res) => {
   }
 });
 
-// =====================================================
-// DEVICE: PROGRAM PROGRESS
-// Main ESP32 calls this when pump/fan/uvc changes.
-// =====================================================
 app.post("/api/device/programProgress", async (req, res) => {
   const auth = requireDeviceKey(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
   const { lockerId, bookingId, programRunId, programStep } = req.body as {
@@ -809,17 +697,11 @@ app.post("/api/device/programProgress", async (req, res) => {
   };
 
   if (!lockerId || !bookingId || !programStep) {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_FIELDS",
-    });
+    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
   }
 
-  if (!["mist", "fan", "uvc", "awaiting_retrieval"].includes(programStep)) {
-    return res.status(400).json({
-      ok: false,
-      error: "INVALID_PROGRAM_STEP",
-    });
+  if (!["mist", "fan", "uvc", "awaiting_payment"].includes(programStep)) {
+    return res.status(400).json({ ok: false, error: "INVALID_PROGRAM_STEP" });
   }
 
   try {
@@ -827,38 +709,48 @@ app.post("/api/device/programProgress", async (req, res) => {
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "BOOKING_NOT_FOUND",
-      });
+      return res.status(404).json({ ok: false, error: "BOOKING_NOT_FOUND" });
     }
 
     const booking = bookingSnap.data() as any;
 
     if (booking.lockerId !== lockerId) {
-      return res.status(400).json({
-        ok: false,
-        error: "LOCKER_MISMATCH",
-      });
+      return res.status(400).json({ ok: false, error: "LOCKER_MISMATCH" });
     }
 
-    if (programRunId && booking.programRunId && booking.programRunId !== programRunId) {
-      return res.status(400).json({
-        ok: false,
-        error: "PROGRAM_RUN_MISMATCH",
-      });
+    if (
+      programRunId &&
+      booking.programRunId &&
+      booking.programRunId !== programRunId
+    ) {
+      return res.status(400).json({ ok: false, error: "PROGRAM_RUN_MISMATCH" });
     }
 
     const patch: Record<string, any> = {
       programStep,
       deviceStatus: deviceStatusForStep(programStep),
       lastDeviceUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    if (programStep === "awaiting_retrieval") {
+    if (programStep === "awaiting_payment") {
+      patch.status = "awaiting_payment";
       patch.programFinished = true;
-      patch.programStepEndsAt = null;
       patch.programFinishedAt = admin.firestore.FieldValue.serverTimestamp();
+      patch.programStepEndsAt = null;
+      patch.deviceStatus = {
+        lock: true,
+        mist: false,
+        fan: false,
+        uvc: false,
+      };
+
+      await db.doc(`lockers/${lockerId}`).update({
+        status: "awaiting_payment",
+        pendingPayment: true,
+        occupied: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
     } else {
       const now = admin.firestore.Timestamp.now();
       patch.programStepEndsAt = tsPlusMs(now, stepSeconds(programStep) * 1000);
@@ -883,153 +775,17 @@ app.post("/api/device/programProgress", async (req, res) => {
   }
 });
 
-// =====================================================
-// DEVICE: VERIFY QR
-// ESP32-CAM calls this after scanning personal QR.
-// =====================================================
-app.post("/api/device/verifyQr", async (req, res) => {
-  const auth = requireDeviceKey(req);
-
-  if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
-  }
-
-  try {
-    const { bookingId, lockerId, token } = parseQrPayload(req.body);
-
-    if (!bookingId || !lockerId || !token) {
-      return res.status(400).json({
-        ok: false,
-        error: "MISSING_FIELDS",
-        message: "QR payload must contain bookingId, lockerId, and token.",
-      });
-    }
-
-    const bookingRef = db.doc(`bookings/${bookingId}`);
-    const lockerRef = db.doc(`lockers/${lockerId}`);
-
-    const result = await db.runTransaction(async (tx) => {
-      const [bookingSnap, lockerSnap] = await Promise.all([
-        tx.get(bookingRef),
-        tx.get(lockerRef),
-      ]);
-
-      if (!bookingSnap.exists) {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_FOUND",
-        };
-      }
-
-      if (!lockerSnap.exists) {
-        return {
-          ok: false as const,
-          error: "LOCKER_NOT_FOUND",
-        };
-      }
-
-      const booking = bookingSnap.data() as any;
-      const locker = lockerSnap.data() as any;
-
-      if (booking.lockerId !== lockerId) {
-        return {
-          ok: false as const,
-          error: "LOCKER_MISMATCH",
-        };
-      }
-
-      if (locker.currentBookingId !== bookingId) {
-        return {
-          ok: false as const,
-          error: "LOCKER_NOT_ASSIGNED_TO_BOOKING",
-        };
-      }
-
-      if (booking.status !== "active") {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_ACTIVE",
-        };
-      }
-
-      const expectedToken = booking.claimQrToken ?? bookingId;
-
-      const expectedHash = sha256Hex(`${expectedToken}|${QR_SECRET}`);
-      const receivedHash = sha256Hex(`${token}|${QR_SECRET}`);
-
-      if (!safeEq(expectedHash, receivedHash)) {
-        return {
-          ok: false as const,
-          error: "INVALID_QR_TOKEN",
-        };
-      }
-
-      tx.update(bookingRef, {
-        retrievalQrVerified: true,
-        qrVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-        programStep: "awaiting_open",
-        deviceStatus: {
-          lock: true,
-          mist: false,
-          fan: false,
-          uvc: false,
-        },
-      });
-
-      return {
-        ok: true as const,
-        bookingId,
-        lockerId,
-      };
-    });
-
-    if (!result.ok) {
-      return res.status(400).json(result);
-    }
-
-    return res.json({
-      ok: true,
-      action: "QR_VERIFIED",
-      bookingId: result.bookingId,
-      lockerId: result.lockerId,
-    });
-  } catch (err: any) {
-    console.error("verifyQr error", err);
-
-    return res.status(500).json({
-      ok: false,
-      error: "INTERNAL",
-      message: err?.message ?? String(err),
-    });
-  }
-});
-
-// =====================================================
-// USER: OPEN LOCKER
-// App calls this after QR verification.
-// =====================================================
-app.post("/api/user/open", async (req, res) => {
+app.post("/api/user/requestPayment", async (req, res) => {
   const auth = await requireUserAuth(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
-  const { bookingId } = req.body as {
-    bookingId?: string;
-  };
+  const { bookingId } = req.body as { bookingId?: string };
 
   if (!bookingId) {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_BOOKING_ID",
-    });
+    return res.status(400).json({ ok: false, error: "MISSING_BOOKING_ID" });
   }
 
   try {
@@ -1039,38 +795,256 @@ app.post("/api/user/open", async (req, res) => {
       const bookingSnap = await tx.get(bookingRef);
 
       if (!bookingSnap.exists) {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_FOUND",
-        };
+        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
       }
 
       const booking = bookingSnap.data() as any;
 
       if (booking.userId !== auth.uid) {
+        return { ok: false as const, error: "FORBIDDEN" };
+      }
+
+      if (booking.status !== "in_use") {
+        return { ok: false as const, error: "BOOKING_NOT_IN_USE" };
+      }
+
+      if (booking.serviceType !== "locker_only") {
+        return { ok: false as const, error: "PAYMENT_AUTO_AFTER_DISINFECTION" };
+      }
+
+      const lockerId = booking.lockerId as string;
+
+      tx.update(bookingRef, {
+        status: "awaiting_payment",
+        programStep: "awaiting_payment",
+        paymentStatus: "unpaid",
+        paymentConfirmed: false,
+        amountDue: Number(booking.amountDue ?? amountForService("locker_only")),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        deviceStatus: {
+          lock: true,
+          mist: false,
+          fan: false,
+          uvc: false,
+        },
+      });
+
+      tx.update(db.doc(`lockers/${lockerId}`), {
+        status: "awaiting_payment",
+        pendingPayment: true,
+        occupied: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { ok: true as const, lockerId };
+    });
+
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
+      ok: true,
+      action: "AWAITING_PAYMENT",
+      lockerId: result.lockerId,
+    });
+  } catch (err: any) {
+    console.error("requestPayment error", err);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL",
+      message: err?.message ?? String(err),
+    });
+  }
+});
+
+app.post("/api/confirmPayment", async (req, res) => {
+  const auth = requireDeviceKey(req);
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  const { lockerId, deviceId, paymentPayload, provider, amountPaid } =
+    req.body as {
+      lockerId?: string;
+      deviceId?: string;
+      paymentPayload?: string;
+      provider?: string;
+      amountPaid?: number;
+    };
+
+  if (!lockerId || !paymentPayload) {
+    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+  }
+
+  try {
+    const lockerRef = db.doc(`lockers/${lockerId}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const lockerSnap = await tx.get(lockerRef);
+
+      if (!lockerSnap.exists) {
+        return { ok: false as const, error: "LOCKER_NOT_FOUND" };
+      }
+
+      const locker = lockerSnap.data() as any;
+      const bookingId = locker.currentBookingId as string | undefined;
+
+      if (!bookingId) {
+        return { ok: false as const, error: "NO_ACTIVE_BOOKING" };
+      }
+
+      const bookingRef = db.doc(`bookings/${bookingId}`);
+      const bookingSnap = await tx.get(bookingRef);
+
+      if (!bookingSnap.exists) {
+        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+      }
+
+      const booking = bookingSnap.data() as any;
+
+      if (booking.status !== "awaiting_payment") {
+        return { ok: false as const, error: "NOT_AWAITING_PAYMENT" };
+      }
+
+      const requiredAmount = Number(
+        booking.amountDue ?? amountForService(booking.serviceType ?? "locker_only")
+      );
+
+      const paid = Number(amountPaid ?? 0);
+
+      if (!Number.isFinite(paid) || paid < requiredAmount) {
         return {
           ok: false as const,
-          error: "FORBIDDEN",
+          error: "INSUFFICIENT_PAYMENT",
+          requiredAmount,
+          amountPaid: paid,
         };
       }
 
-      if (booking.status !== "active") {
-        return {
-          ok: false as const,
-          error: "BOOKING_NOT_ACTIVE",
-        };
+      const paymentRef = db.collection("payments").doc();
+      const retrievalQrToken = crypto.randomUUID();
+
+      tx.set(paymentRef, {
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        userId: booking.userId ?? null,
+        bookingId,
+        lockerId,
+        provider: provider ?? "cash",
+        paymentMethod: "coin_slot",
+        rawPayload: paymentPayload,
+        status: "paid",
+        deviceId: deviceId ?? null,
+        amountPaid: paid,
+        requiredAmount,
+      });
+
+      tx.update(bookingRef, {
+        status: "awaiting_retrieval_qr",
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        paymentId: paymentRef.id,
+        paymentConfirmed: true,
+        paymentStatus: "paid",
+        paymentProvider: provider ?? "cash",
+        paymentPayload,
+        amountPaid: paid,
+        retrievalQrGenerated: true,
+        retrievalQrToken,
+        retrievalQrVerified: false,
+        retrievalQrVerifiedAt: null,
+        programStep: "awaiting_retrieval",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        deviceStatus: {
+          lock: true,
+          mist: false,
+          fan: false,
+          uvc: false,
+        },
+      });
+
+      tx.update(lockerRef, {
+        status: "awaiting_retrieval",
+        pendingPayment: false,
+        pendingPaymentExpiresAt: null,
+        lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
+        currentBookingId: bookingId,
+        occupied: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {
+        ok: true as const,
+        bookingId,
+        requiredAmount,
+        amountPaid: paid,
+      };
+    });
+
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
+      ok: true,
+      action: "PAYMENT_CONFIRMED",
+      bookingId: result.bookingId,
+      requiredAmount: result.requiredAmount,
+      amountPaid: result.amountPaid,
+    });
+  } catch (err: any) {
+    console.error("confirmPayment error", err);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL",
+      message: err?.message ?? String(err),
+    });
+  }
+});
+
+app.post("/api/user/open", async (req, res) => {
+  const auth = await requireUserAuth(req);
+
+  if (!auth.ok) {
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  const { bookingId } = req.body as { bookingId?: string };
+
+  if (!bookingId) {
+    return res.status(400).json({ ok: false, error: "MISSING_BOOKING_ID" });
+  }
+
+  try {
+    const bookingRef = db.doc(`bookings/${bookingId}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const bookingSnap = await tx.get(bookingRef);
+
+      if (!bookingSnap.exists) {
+        return { ok: false as const, error: "BOOKING_NOT_FOUND" };
+      }
+
+      const booking = bookingSnap.data() as any;
+
+      if (booking.userId !== auth.uid) {
+        return { ok: false as const, error: "FORBIDDEN" };
+      }
+
+      if (booking.status !== "retrieval_verified") {
+        return { ok: false as const, error: "RETRIEVAL_QR_NOT_VERIFIED" };
       }
 
       if (booking.retrievalQrVerified !== true) {
-        return {
-          ok: false as const,
-          error: "QR_NOT_VERIFIED",
-        };
+        return { ok: false as const, error: "QR_NOT_VERIFIED" };
       }
 
       tx.update(bookingRef, {
         programStep: "open",
         openedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         deviceStatus: {
           lock: false,
           mist: false,
@@ -1079,10 +1053,7 @@ app.post("/api/user/open", async (req, res) => {
         },
       });
 
-      return {
-        ok: true as const,
-        lockerId: booking.lockerId,
-      };
+      return { ok: true as const, lockerId: booking.lockerId };
     });
 
     if (!result.ok) {
@@ -1105,34 +1076,17 @@ app.post("/api/user/open", async (req, res) => {
   }
 });
 
-// =====================================================
-// USER: COMPLETE BOOKING
-// Booking can only be completed after:
-// 1. QR was verified.
-// 2. Locker was opened.
-// 3. Helmet is no longer detected.
-// =====================================================
 app.post("/api/user/complete", async (req, res) => {
   const auth = await requireUserAuth(req);
 
   if (!auth.ok) {
-    return res.status(auth.status).json({
-      ok: false,
-      error: auth.error,
-    });
+    return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
-  const { bookingId, selectedModes, sequenceName } = req.body as {
-    bookingId?: string;
-    selectedModes?: string[];
-    sequenceName?: string;
-  };
+  const { bookingId } = req.body as { bookingId?: string };
 
   if (!bookingId) {
-    return res.status(400).json({
-      ok: false,
-      error: "MISSING_FIELDS",
-    });
+    return res.status(400).json({ ok: false, error: "MISSING_BOOKING_ID" });
   }
 
   try {
@@ -1159,11 +1113,11 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
-      if (booking.status !== "active") {
+      if (booking.status !== "retrieval_verified") {
         return {
           ok: false as const,
-          error: "BOOKING_NOT_ACTIVE",
-          message: "Only active bookings can be completed.",
+          error: "BOOKING_NOT_READY",
+          message: "Booking is not ready to complete.",
         };
       }
 
@@ -1171,7 +1125,7 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "QR_NOT_VERIFIED",
-          message: "Please scan your QR code before completing the booking.",
+          message: "Please scan the retrieval QR first.",
         };
       }
 
@@ -1187,7 +1141,8 @@ app.post("/api/user/complete", async (req, res) => {
         return {
           ok: false as const,
           error: "HELMET_STILL_INSIDE",
-          message: "Helmet is still detected inside the locker. Please retrieve it before completing the booking.",
+          message:
+            "Helmet is still detected inside the locker. Please retrieve it before completing the booking.",
         };
       }
 
@@ -1212,15 +1167,16 @@ app.post("/api/user/complete", async (req, res) => {
         };
       }
 
+      const locker = lockerSnap.data() as any;
+
       tx.update(bookingRef, {
         status: "completed",
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         completedByUserId: auth.uid,
-        selectedModes: Array.isArray(selectedModes) ? selectedModes : [],
-        sequenceName: sequenceName ?? booking.sequenceName ?? "custom",
         programStep: "completed",
         programFinished: true,
-        retrievalQrVerified: false,
+        retrievalQrVerified: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         deviceStatus: {
           lock: true,
           mist: false,
@@ -1238,14 +1194,15 @@ app.post("/api/user/complete", async (req, res) => {
         reservationExpiresAt: null,
         pendingPaymentExpiresAt: null,
         lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastDisinfectionAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastDisinfectionAt:
+          booking.serviceType === "disinfect_only" ||
+          booking.serviceType === "combined"
+            ? admin.firestore.FieldValue.serverTimestamp()
+            : locker.lastDisinfectionAt ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      return {
-        ok: true as const,
-        lockerId,
-      };
+      return { ok: true as const, lockerId };
     });
 
     if (!result.ok) {
@@ -1268,9 +1225,13 @@ app.post("/api/user/complete", async (req, res) => {
   }
 });
 
-// =====================================================
-// SERVER
-// =====================================================
+app.post("/api/expireNow", async (_req, res) => {
+  return res.json({
+    ok: true,
+    message: "Manual expiration is not used in the new flow.",
+  });
+});
+
 const port = Number(process.env.PORT) || 3000;
 
 app.listen(port, "0.0.0.0", () => {
