@@ -89,7 +89,7 @@ export function deviceProgramProgress(input: {
   bookingId: string;
   deviceId?: string;
   programRunId?: string;
-  programStep: "mist" | "fan" | "uvc" | "awaiting_retrieval";
+  programStep: "mist" | "fan" | "uvc" | "awaiting_payment";
 }) {
   return postJson<any>("/api/device/programProgress", input);
 }
@@ -99,33 +99,30 @@ export function deviceVerifyQr(input: {
   bookingId?: string;
   lockerId?: string;
   token?: string;
+  type?: "booking" | "retrieval";
   deviceId?: string;
 }) {
   return postJson<any>("/api/device/verifyQr", input);
 }
 
-export function expireNow() {
-  return postJson<any>("/api/expireNow", {});
+export function userStartProgram(input: { bookingId: string }) {
+  return postJsonAsUser<any>("/api/user/startProgram", input);
 }
 
-export function userStartProgram(input: {
-  bookingId: string;
-  selectedModes: string[];
-  sequenceName: string;
-}) {
-  return postJsonAsUser<any>("/api/user/startProgram", input);
+export function userRequestPayment(input: { bookingId: string }) {
+  return postJsonAsUser<any>("/api/user/requestPayment", input);
 }
 
 export function userOpenLocker(input: { bookingId: string }) {
   return postJsonAsUser<any>("/api/user/open", input);
 }
 
-export function userCompleteBooking(input: {
-  bookingId: string;
-  selectedModes: string[];
-  sequenceName: string;
-}) {
+export function userCompleteBooking(input: { bookingId: string }) {
   return postJsonAsUser<any>("/api/user/complete", input);
+}
+
+export function expireNow() {
+  return postJson<any>("/api/expireNow", {});
 }
 
 const api = {
@@ -135,10 +132,11 @@ const api = {
   deviceSensorStatus,
   deviceProgramProgress,
   deviceVerifyQr,
-  expireNow,
   userStartProgram,
+  userRequestPayment,
   userOpenLocker,
   userCompleteBooking,
+  expireNow,
 };
 
 export default api;
