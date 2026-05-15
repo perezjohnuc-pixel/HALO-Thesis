@@ -1,9 +1,15 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() { return request.auth != null; }
-    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
 
     function myUser() {
       return signedIn()
@@ -20,16 +26,131 @@ service cloud.firestore {
       );
     }
 
+    function bookingOwnedByUser(bookingId) {
+      return bookingId != null
+        && exists(/databases/$(database)/documents/bookings/$(bookingId))
+        && get(/databases/$(database)/documents/bookings/$(bookingId)).data.userId == request.auth.uid;
+    }
+
+    function bookingOwnedByUserAfter(bookingId) {
+      return bookingId != null
+        && existsAfter(/databases/$(database)/documents/bookings/$(bookingId))
+        && getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.userId == request.auth.uid;
+    }
+
+    function bookingIsCancelledAfter(bookingId) {
+      return bookingId != null
+        && existsAfter(/databases/$(database)/documents/bookings/$(bookingId))
+        && getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.status == "cancelled";
+    }
+
+    function validServiceType(serviceType) {
+      return serviceType in [
+        "locker_only",
+        "disinfect_only",
+        "combined"
+      ];
+    }
+
+    function validAmount(serviceType, amountDue) {
+      return (
+        serviceType == "locker_only" &&
+        amountDue == 25
+      ) || (
+        serviceType == "disinfect_only" &&
+        amountDue == 25
+      ) || (
+        serviceType == "combined" &&
+        amountDue == 30
+      );
+    }
+
+    function validSelectedModes(serviceType, selectedModes) {
+      return selectedModes is list && (
+        (
+          serviceType == "locker_only" &&
+          (
+            selectedModes.size() == 0 ||
+            (
+              selectedModes.size() == 1 &&
+              selectedModes.hasOnly(["locker"])
+            )
+          )
+        ) || (
+          serviceType == "disinfect_only" &&
+          selectedModes.size() == 3 &&
+          selectedModes.hasAll(["mist", "fan", "uvc"]) &&
+          selectedModes.hasOnly(["mist", "fan", "uvc"])
+        ) || (
+          serviceType == "combined" &&
+          selectedModes.size() == 4 &&
+          selectedModes.hasAll(["locker", "mist", "fan", "uvc"]) &&
+          selectedModes.hasOnly(["locker", "mist", "fan", "uvc"])
+        )
+      );
+    }
+
+    function userCanSelectMode() {
+      return signedIn()
+        && resource.data.userId == request.auth.uid
+        && resource.data.status == "confirmed"
+        && resource.data.bookingQrVerified == true
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "status",
+          "serviceType",
+          "selectedModes",
+          "amountDue",
+          "durationMin",
+          "updatedAt"
+        ])
+        && request.resource.data.status == "mode_selected"
+        && validServiceType(request.resource.data.serviceType)
+        && validSelectedModes(
+          request.resource.data.serviceType,
+          request.resource.data.selectedModes
+        )
+        && validAmount(
+          request.resource.data.serviceType,
+          request.resource.data.amountDue
+        )
+        && request.resource.data.durationMin is int
+        && request.resource.data.durationMin > 0;
+    }
+
+    function userCanCancelBooking() {
+      return signedIn()
+        && resource.data.userId == request.auth.uid
+        && resource.data.status in [
+          "awaiting_booking_qr",
+          "confirmed",
+          "mode_selected",
+          "waiting_for_helmet",
+          "awaiting_payment"
+        ]
+        && resource.data.paymentStatus != "paid"
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "status",
+          "cancelledAt",
+          "updatedAt"
+        ])
+        && request.resource.data.status == "cancelled";
+    }
+
     match /users/{uid} {
       allow read: if isSelf(uid) || isAdmin();
+
       allow create: if isSelf(uid)
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role == "user"
         && request.resource.data.createdAt is timestamp;
+
       allow update: if isAdmin()
-        || (isSelf(uid)
-            && !request.resource.data.diff(resource.data).changedKeys()
-                 .hasAny(["role", "createdAt", "uid"]));
+        || (
+          isSelf(uid)
+          && !request.resource.data.diff(resource.data).changedKeys()
+            .hasAny(["role", "createdAt", "uid"])
+        );
+
       allow delete: if isAdmin();
     }
 
@@ -38,58 +159,106 @@ service cloud.firestore {
 
       allow create, delete: if isAdmin();
 
-      allow update: if isAdmin() || (
-        signedIn()
-        && resource.data.status == "available"
-        && request.resource.data.status == "pending_payment"
-        && request.resource.data.pendingPayment == true
-        && request.resource.data.occupied == false
-        && request.resource.data.currentBookingId is string
-      );
+      allow update: if isAdmin()
+        ||
+        (
+          // User reserves an available locker.
+          signedIn()
+          && resource.data.status == "available"
+          && request.resource.data.status == "reserved"
+          && request.resource.data.occupied == true
+          && request.resource.data.pendingPayment == false
+          && request.resource.data.currentBookingId is string
+          && request.resource.data.reservedByUserId == request.auth.uid
+          && bookingOwnedByUserAfter(request.resource.data.currentBookingId)
+          && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.currentBookingId)).data.status == "awaiting_booking_qr"
+        )
+        ||
+        (
+          // User cancels booking and releases the locker.
+          signedIn()
+          && resource.data.currentBookingId is string
+          && bookingOwnedByUser(resource.data.currentBookingId)
+          && bookingIsCancelledAfter(resource.data.currentBookingId)
+          && request.resource.data.status == "available"
+          && request.resource.data.occupied == false
+          && request.resource.data.pendingPayment == false
+          && request.resource.data.currentBookingId == null
+          && request.resource.data.reservedByUserId == null
+          && request.resource.data.reservationExpiresAt == null
+          && request.resource.data.pendingPaymentExpiresAt == null
+        );
     }
 
     match /bookings/{bookingId} {
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.lockerId is string
-        && request.resource.data.status == "pending_payment"
+
+        // New flow starts by waiting for personal QR confirmation.
+        && request.resource.data.status == "awaiting_booking_qr"
+
+        // Mode is not selected yet.
+        && request.resource.data.serviceType == null
+        && request.resource.data.selectedModes is list
+        && request.resource.data.selectedModes.size() == 0
+
+        // Payment happens after locker use.
         && request.resource.data.paymentMethod == "cash"
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.startAt is timestamp
-        && request.resource.data.durationMin is int
-        && request.resource.data.durationMin > 0
-        && request.resource.data.amount is int
-        && request.resource.data.amount == 25;
+        && request.resource.data.paymentStatus == "unpaid"
+        && request.resource.data.amountDue == 0
+        && request.resource.data.amountPaid == 0
+        && request.resource.data.paymentConfirmed == false
+
+        // Personal QR has not yet been scanned.
+        && request.resource.data.bookingQrVerified == false
+        && request.resource.data.bookingQrVerifiedAt == null
+
+        // Retrieval QR is only generated after payment.
+        && request.resource.data.retrievalQrGenerated == false
+        && request.resource.data.retrievalQrVerified == false
+        && request.resource.data.retrievalQrVerifiedAt == null
+
+        // Program has not started yet.
+        && request.resource.data.helmetDetected == false
+        && request.resource.data.doorClosed == false
+        && request.resource.data.programStarted == false
+        && request.resource.data.programFinished == false
+
+        && request.resource.data.createdAt is timestamp;
 
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
 
       allow update: if isAdmin()
-        || (
-          signedIn()
-          && resource.data.userId == request.auth.uid
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["status"])
-          && request.resource.data.status == "cancelled"
-        );
+        || userCanSelectMode()
+        || userCanCancelBooking();
 
       allow delete: if isAdmin();
     }
 
     match /payments/{paymentId} {
+      // Payment should be created by backend/admin/device API only.
       allow create: if isAdmin();
+
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
+
       allow update, delete: if isAdmin();
     }
 
     match /logs/{logId} {
+      // Logs should be created by backend/admin only.
       allow create: if isAdmin();
+
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
+
       allow update, delete: if isAdmin();
     }
 
     match /deviceCommands/{cmdId} {
+      // Device commands should not be created directly by normal users.
       allow read, write: if isAdmin();
     }
   }
