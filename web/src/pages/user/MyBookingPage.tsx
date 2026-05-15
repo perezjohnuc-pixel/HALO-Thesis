@@ -3,54 +3,103 @@ import { useNavigate } from "react-router-dom";
 import {
   collection,
   doc,
+  limit,
   onSnapshot,
   orderBy,
   query,
-  where,
-  limit,
-  writeBatch,
   serverTimestamp,
+  updateDoc,
+  where,
+  writeBatch,
 } from "firebase/firestore";
 import QRCode from "react-qr-code";
 import { db } from "../../lib/firebase";
 import { useAuth } from "../../lib/auth";
-import type { Booking, Locker } from "../../lib/types";
+import type { Booking, Locker, ServiceType } from "../../lib/types";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
-import Countdown from "../../components/Countdown";
 import StatusPill from "../../components/StatusPill";
 
-function toMs(ts: any): number | null {
-  if (!ts) return null;
-  if (typeof ts.toMillis === "function") return ts.toMillis();
-  if (typeof ts.seconds === "number") return ts.seconds * 1000;
-  return null;
-}
+type ModeOption = {
+  id: ServiceType;
+  title: string;
+  amountDue: number;
+  durationMin: number;
+  selectedModes: string[];
+  description: string;
+};
 
-function stepIndexFor(status?: string | null) {
-  if (status === "reserved") return 0;
-  if (status === "pending_payment") return 1;
-  if (status === "active") return 2;
+const MODE_OPTIONS: ModeOption[] = [
+  {
+    id: "locker_only",
+    title: "Locker Mode",
+    amountDue: 25,
+    durationMin: 600,
+    selectedModes: ["locker"],
+    description: "Regular locker storage only. No mist, fan, or UV-C sequence.",
+  },
+  {
+    id: "disinfect_only",
+    title: "Disinfect Mode",
+    amountDue: 25,
+    durationMin: 30,
+    selectedModes: ["mist", "fan", "uvc"],
+    description: "Disinfection support using the mist pump, fan, and UV-C lamps.",
+  },
+  {
+    id: "combined",
+    title: "Combined Mode",
+    amountDue: 30,
+    durationMin: 600,
+    selectedModes: ["locker", "mist", "fan", "uvc"],
+    description: "Secure storage plus the complete disinfection sequence.",
+  },
+];
+
+function getStepIndex(status?: string | null) {
+  if (status === "awaiting_booking_qr") return 0;
+  if (status === "confirmed") return 1;
+  if (
+    status === "mode_selected" ||
+    status === "waiting_for_helmet" ||
+    status === "in_use" ||
+    status === "disinfecting"
+  ) {
+    return 2;
+  }
+  if (status === "awaiting_payment" || status === "paid") return 3;
+  if (status === "awaiting_retrieval_qr" || status === "retrieval_verified") {
+    return 4;
+  }
   if (
     status === "completed" ||
     status === "cancelled" ||
     status === "expired" ||
     status === "failed"
   ) {
-    return 3;
+    return 5;
   }
   return 0;
 }
 
 function getServiceLabel(serviceType?: string | null) {
-  if (serviceType === "locker_only") return "Locker Only";
-  if (serviceType === "disinfectant") return "Disinfectant Only";
-  if (serviceType === "combined") return "Combined";
-  return "Locker Service";
+  if (serviceType === "locker_only") return "Locker Mode";
+  if (serviceType === "disinfect_only") return "Disinfect Mode";
+  if (serviceType === "combined") return "Combined Mode";
+  return "Not selected yet";
 }
 
 function getCoinGuide(amount: number) {
   if (amount === 30) return "Insert six 5-peso coins";
   return "Insert five 5-peso coins";
+}
+
+function terminal(status?: string | null) {
+  return (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "expired" ||
+    status === "failed"
+  );
 }
 
 export default function MyBookingPage() {
@@ -61,7 +110,10 @@ export default function MyBookingPage() {
   const [booking, setBooking] = useState<Booking | null>(null);
   const [locker, setLocker] = useState<Locker | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle"
+  );
+  const [busyMode, setBusyMode] = useState<ServiceType | null>(null);
 
   useEffect(() => {
     if (!uid) return;
@@ -92,52 +144,68 @@ export default function MyBookingPage() {
     const ref = doc(db, "lockers", booking.lockerId);
 
     return onSnapshot(ref, (snap) => {
-      setLocker(snap.exists() ? ({ id: snap.id, ...snap.data() } as any) : null);
+      setLocker(snap.exists() ? ({ id: snap.id, ...snap.data() } as Locker) : null);
     });
   }, [booking?.lockerId]);
 
-  // After ESP32-CAM verifies the QR, automatically take the user to the control panel.
-  useEffect(() => {
-    if (!booking?.id) return;
-
-    const qrVerified = (booking as any)?.retrievalQrVerified === true;
-    const active = booking.status === "active";
-
-    if (active && qrVerified) {
-      navigate(`/app/control/${booking.id}?retrieve=1`, { replace: true });
-    }
-  }, [booking, navigate]);
-
-  const holdMs = useMemo(() => toMs((booking as any)?.holdExpiresAt), [booking]);
+  const bookingQrPayload = useMemo(() => {
+    if (!booking?.id || !booking?.lockerId || !booking?.userId) return null;
+    return `HALO_BOOK|${booking.id}|${booking.lockerId}|${booking.userId}`;
+  }, [booking]);
 
   const retrievalQrPayload = useMemo(() => {
-    const b = booking;
-    if (!b || b.status !== "active") return null;
+    if (!booking?.id || !booking?.lockerId) return null;
+    if (
+      booking.status !== "awaiting_retrieval_qr" &&
+      booking.status !== "retrieval_verified"
+    ) {
+      return null;
+    }
+    if (booking.paymentStatus !== "paid" && booking.paymentConfirmed !== true) {
+      return null;
+    }
+    if (booking.retrievalQrGenerated !== true) return null;
 
-    const paid =
-      (b as any)?.paymentConfirmed === true ||
-      (b as any)?.paymentStatus === "paid";
-
-    if (!paid) return null;
-
-    const claimToken = (b as any)?.claimQrToken ?? b.id;
-
-    // Short QR format for better ESP32-CAM scanning:
-    // HALO|bookingId|lockerId|token
-    return `HALO|${b.id}|${b.lockerId}|${claimToken}`;
+    const token = booking.retrievalQrToken ?? booking.id;
+    return `HALO_RETRIEVE|${booking.id}|${booking.lockerId}|${token}`;
   }, [booking]);
+
+  async function selectMode(option: ModeOption) {
+    if (!booking?.id) return;
+
+    try {
+      setErr(null);
+      setBusyMode(option.id);
+
+      await updateDoc(doc(db, "bookings", booking.id), {
+        status: "mode_selected",
+        serviceType: option.id,
+        selectedModes: option.selectedModes,
+        amountDue: option.amountDue,
+        durationMin: option.durationMin,
+        updatedAt: serverTimestamp(),
+      } as any);
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setBusyMode(null);
+    }
+  }
 
   async function cancel() {
     if (!booking?.id || !booking?.lockerId) return;
 
     try {
+      setErr(null);
+
       const bookingRef = doc(db, "bookings", booking.id);
       const lockerRef = doc(db, "lockers", booking.lockerId);
-
       const batch = writeBatch(db);
 
       batch.update(bookingRef, {
         status: "cancelled",
+        cancelledAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       } as any);
 
       batch.update(lockerRef, {
@@ -145,6 +213,8 @@ export default function MyBookingPage() {
         pendingPayment: false,
         occupied: false,
         currentBookingId: null,
+        reservedByUserId: null,
+        reservationExpiresAt: null,
         pendingPaymentExpiresAt: null,
         updatedAt: serverTimestamp(),
       } as any);
@@ -185,28 +255,21 @@ export default function MyBookingPage() {
     );
   }
 
-  const isTerminal =
-    booking.status === "completed" ||
-    booking.status === "cancelled" ||
-    booking.status === "expired" ||
-    booking.status === "failed";
+  const stepIdx = getStepIndex(booking.status);
+  const isTerminal = terminal(booking.status);
+  const amountDue = typeof booking.amountDue === "number" ? booking.amountDue : 0;
+  const amountPaid =
+    typeof booking.amountPaid === "number" ? booking.amountPaid : 0;
+  const serviceLabel = getServiceLabel(booking.serviceType);
 
-  const canCancel = booking.status === "reserved" || booking.status === "pending_payment";
-  const stepIdx = stepIndexFor(booking.status);
-
-  const amount =
-    typeof (booking as any)?.amount === "number"
-      ? (booking as any).amount
-      : 25;
-
-  const serviceType = (booking as any)?.serviceType ?? "locker_only";
-  const serviceLabel = getServiceLabel(serviceType);
-  const coinGuide = getCoinGuide(amount);
-  const refCode = booking?.id ? booking.id.slice(0, 10) : "";
-
-  const paymentConfirmed =
-    (booking as any)?.paymentConfirmed === true ||
-    (booking as any)?.paymentStatus === "paid";
+  const canCancel =
+    [
+      "awaiting_booking_qr",
+      "confirmed",
+      "mode_selected",
+      "waiting_for_helmet",
+      "awaiting_payment",
+    ].includes(booking.status) && booking.paymentStatus !== "paid";
 
   return (
     <div className="space-y-4">
@@ -216,20 +279,22 @@ export default function MyBookingPage() {
             <div>
               <div className="text-lg font-bold">My booking</div>
               <div className="text-sm text-slate-400">
-                Reserve → Insert Coins → Use Locker → Retrieve with QR
+                Reserve → Scan personal QR → Select mode → Use locker → Pay →
+                Scan retrieval QR
               </div>
             </div>
-
             <StatusPill status={booking.status} />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
             <div className="flex items-center">
               {[
-                { title: "Reserve", desc: "Locker selected" },
-                { title: "Insert Coins", desc: `₱${amount} required` },
-                { title: "In Use", desc: "Locker secured" },
-                { title: "Retrieve", desc: "Scan personal QR" },
+                { title: "Confirm", desc: "Scan personal QR" },
+                { title: "Mode", desc: "Choose service" },
+                { title: "Use", desc: "Store / disinfect" },
+                { title: "Pay", desc: "Coin slot" },
+                { title: "Retrieve", desc: "Scan new QR" },
+                { title: "Done", desc: "Reset locker" },
               ].map((s, i) => {
                 const done = i < stepIdx;
                 const current = i === stepIdx;
@@ -243,26 +308,29 @@ export default function MyBookingPage() {
                           (done
                             ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-200"
                             : current
-                            ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-200"
-                            : "border-slate-700/60 bg-slate-800/60 text-slate-300")
+                              ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-200"
+                              : "border-slate-700/60 bg-slate-800/60 text-slate-300")
                         }
                       >
                         {done ? "✓" : i + 1}
                       </div>
-
-                      <div className="mt-1 text-xs font-semibold text-slate-200">{s.title}</div>
-                      <div className="whitespace-nowrap text-[11px] text-slate-500">{s.desc}</div>
+                      <div className="mt-1 text-xs font-semibold text-slate-200">
+                        {s.title}
+                      </div>
+                      <div className="whitespace-nowrap text-[11px] text-slate-500">
+                        {s.desc}
+                      </div>
                     </div>
 
-                    {i < 3 && (
+                    {i < 5 && (
                       <div
                         className={
                           "mx-2 h-1 flex-1 rounded " +
                           (i < stepIdx
                             ? "bg-emerald-500/30"
                             : i === stepIdx
-                            ? "bg-cyan-500/25"
-                            : "bg-slate-800/60")
+                              ? "bg-cyan-500/25"
+                              : "bg-slate-800/60")
                         }
                       />
                     )}
@@ -280,13 +348,15 @@ export default function MyBookingPage() {
             <div>
               <div className="text-sm text-slate-400">Locker</div>
               <div className="font-semibold">{locker?.name ?? booking.lockerId}</div>
-              <div className="text-xs text-slate-500">Location: {locker?.location ?? "—"}</div>
+              <div className="text-xs text-slate-500">
+                Location: {locker?.location ?? "—"}
+              </div>
             </div>
 
             <div>
-              <div className="text-sm text-slate-400">Selected service</div>
+              <div className="text-sm text-slate-400">Selected mode</div>
               <div className="font-semibold">{serviceLabel}</div>
-              <div className="text-xs text-slate-500">Amount due: ₱{amount}</div>
+              <div className="text-xs text-slate-500">Amount due: ₱{amountDue}</div>
             </div>
 
             <div>
@@ -295,136 +365,185 @@ export default function MyBookingPage() {
             </div>
           </div>
 
-          {(booking.status === "reserved" || booking.status === "pending_payment") && holdMs && (
-            <div className="mt-4">
-              <Badge color="yellow">Payment window</Badge>
-
-              <div className="mt-2 text-3xl font-extrabold">
-                <Countdown targetMs={holdMs} />
-              </div>
-
-              <div className="mt-1 text-sm text-slate-400">
-                Insert coins within the time window to activate your locker session.
-              </div>
-            </div>
-          )}
-
-          {booking.status === "pending_payment" && (
-            <div className="mt-6 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          {booking.status === "awaiting_booking_qr" && bookingQrPayload && (
+            <div className="mt-6 space-y-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
               <div>
-                <div className="font-semibold">Cash payment only</div>
-                <div className="text-sm text-slate-400">
-                  This locker accepts payment through the coin slot connected to the ESP32.
+                <div className="font-semibold">
+                  Step 1: Scan personal QR to confirm booking
+                </div>
+                <div className="text-sm text-slate-300">
+                  Show this QR to the locker scanner. Once verified, the
+                  electromagnetic lock will unlock for initial access and mode
+                  selection.
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Badge color="amber">Amount due: ₱{amount}</Badge>
-                <Badge color="blue">{coinGuide}</Badge>
-                <Badge color="sky">{serviceLabel}</Badge>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                <div className="font-semibold">Instructions</div>
-
-                <div className="mt-1 text-slate-300">
-                  Insert coins into the locker coin slot. Once the total reaches <b>₱{amount}</b>, the ESP32
-                  will notify the backend and the locker will open so you can place your helmet inside.
+              <div className="grid items-start gap-4 md:grid-cols-2">
+                <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
+                  <QRCode value={bookingQrPayload} size={220} />
                 </div>
 
-                <div className="mt-3 text-xs text-slate-400">Reference code</div>
-
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <div className="rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 font-mono text-xs">
-                    {refCode}
+                <div>
+                  <div className="font-semibold">Personal booking QR payload</div>
+                  <div className="mt-2 break-all text-xs text-slate-500">
+                    {bookingQrPayload}
                   </div>
-
-                  <Button size="sm" variant="secondary" onClick={() => copyText(refCode)}>
-                    {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
+                  <Button
+                    className="mt-3"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => copyText(bookingQrPayload)}
+                  >
+                    {copyState === "copied"
+                      ? "Copied"
+                      : copyState === "failed"
+                        ? "Copy failed"
+                        : "Copy payload"}
                   </Button>
                 </div>
-              </div>
-
-              <div className="text-sm text-slate-300">
-                Waiting for <b>ESP32 payment confirmation</b>.
               </div>
             </div>
           )}
 
-          {booking.status === "active" && paymentConfirmed && (
-            <div className="mt-6 space-y-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          {booking.status === "confirmed" && (
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="font-semibold">Step 2: Select service mode</div>
+              <div className="mt-1 text-sm text-slate-400">
+                Choose the function you want to use. Payment will happen after
+                using the locker or disinfection process.
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {MODE_OPTIONS.map((option) => (
+                  <div
+                    key={option.id}
+                    className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold">{option.title}</div>
+                      <Badge color="blue">₱{option.amountDue}</Badge>
+                    </div>
+                    <div className="mt-2 text-sm text-slate-400">
+                      {option.description}
+                    </div>
+                    <Button
+                      className="mt-4 w-full"
+                      disabled={busyMode !== null}
+                      onClick={() => selectMode(option)}
+                    >
+                      {busyMode === option.id ? "Saving..." : "Select"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {["mode_selected", "waiting_for_helmet", "in_use", "disinfecting"].includes(
+            booking.status
+          ) && (
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="font-semibold">Step 3: Use locker</div>
+              <div className="mt-1 text-sm text-slate-400">
+                Place the helmet inside, close the door, and continue to the
+                control panel to start the selected mode.
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge color={booking.helmetDetected ? "green" : "amber"}>
+                  Helmet: {booking.helmetDetected ? "Detected" : "Not detected"}
+                </Badge>
+                <Badge color={booking.doorClosed ? "green" : "amber"}>
+                  Door: {booking.doorClosed ? "Closed" : "Open"}
+                </Badge>
+                <Badge color="blue">{serviceLabel}</Badge>
+              </div>
+              <div className="mt-4">
+                <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
+                  Go to Control Panel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {booking.status === "awaiting_payment" && (
+            <div className="mt-6 space-y-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
               <div>
-                <div className="font-semibold">Locker in use</div>
-                <div className="text-sm text-slate-400">
-                  Your payment has been confirmed. Use this QR later to verify that you are the owner before opening the locker.
+                <div className="font-semibold">Step 4: Pay through coin slot</div>
+                <div className="text-sm text-slate-300">
+                  Insert coins into the locker coin slot. The ESP32 will confirm
+                  the payment when the required amount is reached.
                 </div>
               </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-sm">
-                <div className="font-semibold">Next step</div>
-
-                <div className="mt-1 text-slate-300">
-                  Continue to the locker control page to start the session, monitor the process, and open the locker after QR verification.
-                </div>
-
-                <div className="mt-3">
-                  <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
-                    Next
-                  </Button>
-                </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge color="amber">Amount due: ₱{amountDue}</Badge>
+                <Badge color="blue">{getCoinGuide(amountDue)}</Badge>
+                <Badge color="sky">Paid: ₱{amountPaid}</Badge>
               </div>
+            </div>
+          )}
 
-              {retrievalQrPayload && (
+          {(booking.status === "awaiting_retrieval_qr" ||
+            booking.status === "retrieval_verified") &&
+            retrievalQrPayload && (
+              <div className="mt-6 space-y-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+                <div>
+                  <div className="font-semibold">Step 5: Scan retrieval QR</div>
+                  <div className="text-sm text-slate-300">
+                    Payment is complete. Scan this new QR code through the QR
+                    scanner to unlock the locker and retrieve the helmet.
+                  </div>
+                </div>
+
                 <div className="grid items-start gap-4 md:grid-cols-2">
                   <div className="inline-flex justify-center rounded-2xl bg-white p-4 text-slate-950">
                     <QRCode value={retrievalQrPayload} size={220} />
                   </div>
 
                   <div>
-                    <div className="font-semibold">Personal retrieval QR</div>
-
-                    <div className="text-sm text-slate-400">
-                      This QR appears only after payment is confirmed. Show this to the ESP32-CAM scanner when you want to retrieve your helmet.
-                    </div>
-
+                    <div className="font-semibold">Retrieval QR payload</div>
                     <div className="mt-2 break-all text-xs text-slate-500">
                       {retrievalQrPayload}
                     </div>
-
                     <div className="mt-3 flex flex-col gap-2 md:flex-row">
                       <Button onClick={() => navigate(`/app/control/${booking.id}`)}>
                         Go to Control Panel
                       </Button>
-
-                      <Button variant="secondary" size="sm" onClick={() => copyText(retrievalQrPayload)}>
-                        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy payload"}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => copyText(retrievalQrPayload)}
+                      >
+                        {copyState === "copied"
+                          ? "Copied"
+                          : copyState === "failed"
+                            ? "Copy failed"
+                            : "Copy payload"}
                       </Button>
                     </div>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
           {isTerminal && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="font-semibold">Booking finished</div>
-
                   <div className="text-sm text-slate-400">
-                    Status: <span className="font-semibold text-slate-200">{booking.status}</span>
+                    Status:{" "}
+                    <span className="font-semibold text-slate-200">
+                      {booking.status}
+                    </span>
                   </div>
                 </div>
-
-                <Badge color={booking.status === "completed" ? "green" : "red"}>
-                  {booking.status}
-                </Badge>
+                <StatusPill status={booking.status} />
               </div>
 
               <div className="mt-4 flex flex-col gap-2 md:flex-row">
-                <Button onClick={() => navigate("/app/lockers")}>Reserve another locker</Button>
-
+                <Button onClick={() => navigate("/app/lockers")}>
+                  Reserve another locker
+                </Button>
                 <Button variant="secondary" onClick={() => navigate("/app/history")}>
                   View history
                 </Button>
@@ -438,7 +557,6 @@ export default function MyBookingPage() {
                 Cancel booking
               </Button>
             )}
-
             <Button variant="secondary" onClick={() => window.location.reload()}>
               Refresh
             </Button>
