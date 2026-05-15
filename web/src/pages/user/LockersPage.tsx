@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  addDoc,
   collection,
   doc,
   limit,
@@ -8,8 +7,8 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db } from "../../lib/firebase";
@@ -26,6 +25,7 @@ type LockerDoc = {
   pendingPayment?: boolean;
   currentBookingId?: string | null;
   battery?: number;
+  batteryPct?: number;
   lastHeartbeatAt?: any;
 };
 
@@ -34,54 +34,27 @@ type BookingDoc = {
   userId?: string;
   lockerId?: string;
   status?: string;
-  amount?: number;
-  serviceType?: string;
+  paymentStatus?: string;
 };
 
-type ServiceType = "locker_only" | "disinfectant" | "combined";
-
-const SERVICE_OPTIONS: {
-  id: ServiceType;
-  title: string;
-  price: number;
-  description: string;
-  durationMin: number;
-}[] = [
-  {
-    id: "locker_only",
-    title: "Locker Only",
-    price: 25,
-    description: "Use the locker for storage only. Maximum 10 hours.",
-    durationMin: 600,
-  },
-  {
-    id: "disinfectant",
-    title: "Disinfectant Only",
-    price: 25,
-    description: "Use the cleaning process only: pump, fan, and UV-C.",
-    durationMin: 30,
-  },
-  {
-    id: "combined",
-    title: "Combined",
-    price: 30,
-    description: "Locker storage plus full cleaning process. Maximum 10 hours.",
-    durationMin: 600,
-  },
+const ACTIVE_BOOKING_STATUSES = [
+  "awaiting_booking_qr",
+  "confirmed",
+  "mode_selected",
+  "waiting_for_helmet",
+  "in_use",
+  "disinfecting",
+  "awaiting_payment",
+  "paid",
+  "awaiting_retrieval_qr",
+  "retrieval_verified",
 ];
 
 function getStatus(locker: LockerDoc) {
   if (locker.status) return locker.status;
-  if (locker.pendingPayment) return "pending_payment";
-  if (locker.occupied) return "active";
+  if (locker.pendingPayment) return "awaiting_payment";
+  if (locker.occupied) return "in_use";
   return "available";
-}
-
-function getServiceLabel(serviceType: ServiceType) {
-  if (serviceType === "locker_only") return "Locker Only";
-  if (serviceType === "disinfectant") return "Disinfectant Only";
-  if (serviceType === "combined") return "Combined";
-  return "Locker Service";
 }
 
 export default function LockersPage() {
@@ -91,7 +64,6 @@ export default function LockersPage() {
 
   const [lockers, setLockers] = useState<LockerDoc[]>([]);
   const [activeBooking, setActiveBooking] = useState<BookingDoc | null>(null);
-  const [selectedService, setSelectedService] = useState<ServiceType>("locker_only");
   const [busyLockerId, setBusyLockerId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -119,7 +91,7 @@ export default function LockersPage() {
       collection(db, "bookings"),
       where("userId", "==", uid),
       orderBy("createdAt", "desc"),
-      limit(5)
+      limit(10)
     );
 
     return onSnapshot(
@@ -127,9 +99,7 @@ export default function LockersPage() {
       (snap) => {
         const recent = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as any) }) as BookingDoc)
-          .find((b) =>
-            ["reserved", "pending_payment", "active"].includes(b.status ?? "")
-          );
+          .find((b) => ACTIVE_BOOKING_STATUSES.includes(b.status ?? ""));
 
         setActiveBooking(recent ?? null);
       },
@@ -137,25 +107,19 @@ export default function LockersPage() {
     );
   }, [uid]);
 
-  const selectedOption = useMemo(() => {
-    return SERVICE_OPTIONS.find((s) => s.id === selectedService) ?? SERVICE_OPTIONS[0];
-  }, [selectedService]);
-
   async function reserveLocker(locker: LockerDoc) {
     if (!uid) {
       navigate("/auth/login");
       return;
     }
 
-    const lockerStatus = getStatus(locker);
-
-    if (lockerStatus !== "available") {
+    if (getStatus(locker) !== "available") {
       setErr("This locker is not available right now.");
       return;
     }
 
     if (activeBooking) {
-      setErr("You already have an active or pending booking. Please finish or cancel it first.");
+      setErr("You already have an active booking. Please finish or cancel it first.");
       navigate("/app/booking");
       return;
     }
@@ -164,37 +128,49 @@ export default function LockersPage() {
       setErr(null);
       setBusyLockerId(locker.id);
 
-      const now = new Date();
-      const holdExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+      const bookingRef = doc(collection(db, "bookings"));
+      const lockerRef = doc(db, "lockers", locker.id);
+      const reservationExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      const bookingRef = await addDoc(collection(db, "bookings"), {
+      const batch = writeBatch(db);
+
+      batch.set(bookingRef, {
         userId: uid,
         lockerId: locker.id,
 
-        status: "pending_payment",
-        paymentMethod: "cash",
-        paymentStatus: "pending",
-        paymentConfirmed: false,
+        status: "awaiting_booking_qr",
 
-        serviceType: selectedOption.id,
-        amount: selectedOption.price,
-        durationMin: selectedOption.durationMin,
+        serviceType: null,
+        selectedModes: [],
+        durationMin: 0,
 
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        startAt: serverTimestamp(),
-        holdExpiresAt,
-        paymentRequestedAt: serverTimestamp(),
-
-        claimQrToken: null,
+        bookingQrVerified: false,
+        bookingQrVerifiedAt: null,
 
         helmetDetected: false,
-        doorClosed: true,
+        helmetDetectedAt: null,
+        doorClosed: false,
+        doorClosedAt: null,
+
         programStarted: false,
         programFinished: false,
-        programStep: "waiting_payment",
+        programRunId: null,
+        programStep: "awaiting_booking_qr",
         programStepEndsAt: null,
+
+        amountDue: 0,
+        amountPaid: 0,
+        paymentStatus: "unpaid",
+        paymentMethod: "cash",
+        paymentProvider: "cash",
+        paymentConfirmed: false,
+        paymentId: null,
+        paidAt: null,
+
+        retrievalQrGenerated: false,
+        retrievalQrToken: null,
         retrievalQrVerified: false,
+        retrievalQrVerifiedAt: null,
 
         deviceStatus: {
           lock: true,
@@ -202,18 +178,26 @@ export default function LockersPage() {
           fan: false,
           uvc: false,
         },
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
       });
 
-      await updateDoc(doc(db, "lockers", locker.id), {
-        status: "pending_payment",
-        pendingPayment: true,
-        occupied: false,
+      batch.update(lockerRef, {
+        status: "reserved",
+        occupied: true,
+        pendingPayment: false,
         currentBookingId: bookingRef.id,
-        pendingPaymentExpiresAt: holdExpiresAt,
         reservedByUserId: uid,
+        reservationExpiresAt,
+        pendingPaymentExpiresAt: null,
         updatedAt: serverTimestamp(),
       });
 
+      await batch.commit();
       navigate("/app/booking");
     } catch (e: any) {
       setErr(e.message ?? String(e));
@@ -226,9 +210,14 @@ export default function LockersPage() {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <div className="text-sm uppercase tracking-wide text-slate-400">Customer</div>
+          <div className="text-sm uppercase tracking-wide text-slate-400">
+            Customer
+          </div>
           <div className="text-2xl font-bold">Lockers</div>
-          <div className="text-sm text-slate-400">Reserve an available locker</div>
+          <div className="text-sm text-slate-400">
+            Reserve an available locker first. The service mode is selected after
+            scanning your personal QR.
+          </div>
         </CardHeader>
       </Card>
 
@@ -238,7 +227,8 @@ export default function LockersPage() {
             <div>
               <div className="text-lg font-bold">Reserve a locker</div>
               <div className="text-sm text-slate-400">
-                Choose a service, reserve a locker, then pay using the coin slot.
+                New flow: Reserve → Scan personal QR → Select mode → Use locker
+                → Pay → Scan retrieval QR.
               </div>
             </div>
 
@@ -257,7 +247,8 @@ export default function LockersPage() {
 
           {activeBooking && (
             <div className="mb-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
-              You already have a booking. Go to My Booking to continue payment, control, retrieval, or cancellation.
+              You already have a booking. Go to My Booking to continue QR
+              confirmation, mode selection, payment, or retrieval.
               <div className="mt-3">
                 <Button size="sm" onClick={() => navigate("/app/booking")}>
                   Go to My Booking
@@ -266,43 +257,37 @@ export default function LockersPage() {
             </div>
           )}
 
-          <div className="mb-5">
-            <div className="mb-2 text-sm font-semibold text-slate-200">
-              Choose service type
+          <div className="mb-5 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="font-semibold text-slate-100">Locker Mode</div>
+              <div className="mt-2 text-sm text-slate-400">
+                Storage only. The locker remains locked until the rider proceeds
+                to payment and retrieval.
+              </div>
+              <Badge className="mt-3" color="blue">
+                ₱25
+              </Badge>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
-              {SERVICE_OPTIONS.map((service) => {
-                const selected = selectedService === service.id;
-
-                return (
-                  <button
-                    key={service.id}
-                    type="button"
-                    onClick={() => setSelectedService(service.id)}
-                    className={
-                      "rounded-2xl border p-4 text-left transition " +
-                      (selected
-                        ? "border-cyan-400/60 bg-cyan-500/15"
-                        : "border-slate-800 bg-slate-950/40 hover:border-slate-600")
-                    }
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold text-slate-100">{service.title}</div>
-                      <Badge color={selected ? "blue" : "slate"}>₱{service.price}</Badge>
-                    </div>
-
-                    <div className="mt-2 text-sm text-slate-400">{service.description}</div>
-                  </button>
-                );
-              })}
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="font-semibold text-slate-100">Disinfect Mode</div>
+              <div className="mt-2 text-sm text-slate-400">
+                Runs mist pump, fan, and UV-C process for disinfection support.
+              </div>
+              <Badge className="mt-3" color="blue">
+                ₱25
+              </Badge>
             </div>
-          </div>
 
-          <div className="mb-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm">
-            <div className="font-semibold">Selected service: {getServiceLabel(selectedService)}</div>
-            <div className="mt-1 text-slate-400">
-              Payment required: <b>₱{selectedOption.price}</b>. Insert 5-peso coins until the required amount is reached.
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="font-semibold text-slate-100">Combined Mode</div>
+              <div className="mt-2 text-sm text-slate-400">
+                Uses both secure locker storage and the full disinfection
+                sequence.
+              </div>
+              <Badge className="mt-3" color="blue">
+                ₱30
+              </Badge>
             </div>
           </div>
 
@@ -330,7 +315,6 @@ export default function LockersPage() {
                         <div className="text-sm text-slate-400">
                           {locker.location ?? "No location"}
                         </div>
-
                         <div className="mt-3">
                           <StatusPill status={status} />
                         </div>
@@ -348,7 +332,9 @@ export default function LockersPage() {
                       Battery:{" "}
                       {typeof locker.battery === "number"
                         ? `${locker.battery}%`
-                        : "—"}{" "}
+                        : typeof locker.batteryPct === "number"
+                          ? `${locker.batteryPct}%`
+                          : "—"}{" "}
                       • Last heartbeat: —
                     </div>
                   </div>
