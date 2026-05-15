@@ -1,21 +1,35 @@
-import React from "react";
 import { Badge } from "./ui";
 
 export default function StatusPill({ status }: { status?: string | null }) {
   const s = status ?? "unknown";
+
   const color =
-    s === "available"
+    s === "available" || s === "completed"
       ? "green"
-      : s === "reserved"
-        ? "slate"
-        : s === "pending_payment"
+      : s === "awaiting_booking_qr" ||
+          s === "reserved" ||
+          s === "confirmed" ||
+          s === "mode_selected"
+        ? "blue"
+        : s === "waiting_for_helmet" ||
+            s === "awaiting_payment" ||
+            s === "awaiting_retrieval_qr" ||
+            s === "awaiting_retrieval"
           ? "amber"
-          : s === "active"
+          : s === "in_use" ||
+              s === "disinfecting" ||
+              s === "retrieval_verified" ||
+              s === "paid"
             ? "sky"
-            : s === "offline" || s === "error"
+            : s === "offline" ||
+                s === "error" ||
+                s === "failed" ||
+                s === "cancelled" ||
+                s === "expired"
               ? "red"
-              : s === "failed" || s === "cancelled" || s === "expired"
-                ? "red"
-                : "slate";
-  return <Badge color={color as any}>{s}</Badge>;
+              : "slate";
+
+  const label = s.replaceAll("_", " ");
+
+  return <Badge color={color as any}>{label}</Badge>;
 }
