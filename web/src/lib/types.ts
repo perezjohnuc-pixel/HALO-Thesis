@@ -1,42 +1,54 @@
 export type UserRole = "user" | "admin";
 
-// Locker status values written by Cloud Functions.
-// NOTE: We keep "occupied" for backwards compatibility with earlier drafts.
 export type LockerStatus =
   | "available"
   | "reserved"
-  | "pending_payment"
-  | "active"
-  | "occupied"
+  | "confirmed"
+  | "in_use"
+  | "disinfecting"
+  | "awaiting_payment"
+  | "awaiting_retrieval"
+  | "maintenance"
   | "offline"
   | "error";
 
 export type BookingStatus =
-  | "reserved"
-  | "pending_payment"
-  | "active"
-  | "cancelled"
+  | "awaiting_booking_qr"
+  | "confirmed"
+  | "mode_selected"
+  | "waiting_for_helmet"
+  | "in_use"
+  | "disinfecting"
+  | "awaiting_payment"
+  | "paid"
+  | "awaiting_retrieval_qr"
+  | "retrieval_verified"
   | "completed"
+  | "cancelled"
   | "expired"
   | "failed";
 
-// In the thesis demo we support both cash and e-wallet simulations.
+export type ServiceType = "locker_only" | "disinfect_only" | "combined";
+
 export type PaymentProvider = "gcash" | "maya" | "cash" | "unknown";
 
 export type PaymentMethod = "online" | "cash";
 
-export type FireTimestamp = any; // Firestore Timestamp or serverTimestamp() resolved value
+export type FireTimestamp = any;
 
 export type UserDoc = {
   uid: string;
   email?: string | null;
   displayName?: string | null;
+  publicId?: string | null;
+  personalQrActive?: boolean;
   role: UserRole;
   createdAt?: FireTimestamp;
   lastLoginAt?: FireTimestamp;
 };
 
 export type Locker = {
+  id?: string;
   name?: string;
   location?: string;
   status: LockerStatus;
@@ -46,11 +58,14 @@ export type Locker = {
   pendingPayment?: boolean;
   reservationExpiresAt?: FireTimestamp | null;
   pendingPaymentExpiresAt?: FireTimestamp | null;
+  battery?: number;
   batteryPct?: number;
   lastHeartbeatAt?: FireTimestamp;
   lastDisinfectionAt?: FireTimestamp;
   lastPaymentAt?: FireTimestamp;
+  lastCompletedAt?: FireTimestamp;
   createdAt?: FireTimestamp;
+  updatedAt?: FireTimestamp;
 };
 
 export type Booking = {
@@ -58,36 +73,60 @@ export type Booking = {
   userId: string;
   lockerId: string;
   status: BookingStatus;
-  amount: number; // PHP
-  durationMin: number;
 
-  createdAt?: FireTimestamp;
-  startAt?: FireTimestamp;
-  endAt?: FireTimestamp | null;
+  serviceType?: ServiceType | null;
+  selectedModes?: string[];
+  sequenceName?: string | null;
+  durationMin?: number;
 
-  // Server-minted QR
-  qrToken?: string;
-  qrExpiresAt?: FireTimestamp | null;
-  holdExpiresAt?: FireTimestamp | null;
-  qrUsedAt?: FireTimestamp | null;
+  bookingQrVerified?: boolean;
+  bookingQrVerifiedAt?: FireTimestamp | null;
 
-  // Payment
-  paidAt?: FireTimestamp | null;
-  paymentId?: string | null;
+  helmetDetected?: boolean;
+  helmetDetectedAt?: FireTimestamp | null;
+  doorClosed?: boolean;
+  doorClosedAt?: FireTimestamp | null;
+
+  programStarted?: boolean;
+  programStartedAt?: FireTimestamp | null;
+  programFinished?: boolean;
+  programFinishedAt?: FireTimestamp | null;
+  programRunId?: string | null;
+  programStep?: string | null;
+  programStepEndsAt?: FireTimestamp | null;
+
+  amountDue?: number;
+  amountPaid?: number;
+  paymentStatus?: "unpaid" | "paid" | "failed" | string;
   paymentMethod?: PaymentMethod | null;
   paymentProvider?: PaymentProvider | string | null;
+  paymentConfirmed?: boolean;
+  paymentPayload?: string | null;
+  paymentId?: string | null;
+  paidAt?: FireTimestamp | null;
 
-  // Completion/cancel
+  retrievalQrGenerated?: boolean;
+  retrievalQrToken?: string | null;
+  retrievalQrVerified?: boolean;
+  retrievalQrVerifiedAt?: FireTimestamp | null;
+
+  deviceStatus?: {
+    lock?: boolean;
+    mist?: boolean;
+    fan?: boolean;
+    uvc?: boolean;
+  };
+
+  createdAt?: FireTimestamp;
+  updatedAt?: FireTimestamp;
+  startedAt?: FireTimestamp | null;
+  startAt?: FireTimestamp | null;
+  endAt?: FireTimestamp | null;
   cancelledAt?: FireTimestamp | null;
   completedAt?: FireTimestamp | null;
   expiredAt?: FireTimestamp | null;
   failedAt?: FireTimestamp | null;
   failReason?: string | null;
-
-  // Completion metadata (filled by Cloud Functions)
-  selectedModes?: string[];
-  sequenceName?: string;
-  disinfectionOk?: boolean;
 };
 
 export type LogEvent = {
@@ -95,6 +134,7 @@ export type LogEvent = {
   type: string;
   message: string;
   lockerId?: string | null;
+  bookingId?: string | null;
   userId?: string | null;
   payload?: any;
 };
