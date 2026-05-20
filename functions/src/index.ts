@@ -28,16 +28,34 @@ const DEFAULT_FAN_SEC = Number(
 );
 const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 30);
 
-const LOCKER_INCLUDED_MINUTES = Number(process.env.LOCKER_INCLUDED_MINUTES || 600);
-const LOCKER_EXTRA_FEE_PER_HOUR = Number(
-  process.env.LOCKER_EXTRA_FEE_PER_HOUR || 10
+// Locker and Combined Mode billing.
+// Actual setting: 600 minutes = 10 hours.
+// Demo setting can be changed in Railway Variables.
+const LOCKER_INCLUDED_MINUTES = Number(
+  process.env.LOCKER_INCLUDED_MINUTES || 600
+);
+
+const LOCKER_EXTRA_BLOCK_MINUTES = Number(
+  process.env.LOCKER_EXTRA_BLOCK_MINUTES || 60
+);
+
+const LOCKER_EXTRA_FEE_PER_BLOCK = Number(
+  process.env.LOCKER_EXTRA_FEE_PER_BLOCK || 15
+);
+
+// Disinfect Mode unattended pickup billing.
+// Actual setting: 30 minutes free pickup time.
+// Demo setting can be changed in Railway Variables.
+const DISINFECT_FREE_PICKUP_MINUTES = Number(
+  process.env.DISINFECT_FREE_PICKUP_MINUTES || 30
 );
 
 const DISINFECT_EXTRA_BLOCK_MINUTES = Number(
   process.env.DISINFECT_EXTRA_BLOCK_MINUTES || 30
 );
+
 const DISINFECT_EXTRA_FEE_PER_BLOCK = Number(
-  process.env.DISINFECT_EXTRA_FEE_PER_BLOCK || 5
+  process.env.DISINFECT_EXTRA_FEE_PER_BLOCK || 10
 );
 
 type QrPurpose = "booking" | "retrieval";
@@ -124,8 +142,9 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
       const overtimeMs = nowMs - includedUntilMs;
 
       if (overtimeMs > 0) {
-        extraUnits = Math.ceil(overtimeMs / (60 * 60 * 1000));
-        extraAmount = extraUnits * LOCKER_EXTRA_FEE_PER_HOUR;
+        const blockMs = LOCKER_EXTRA_BLOCK_MINUTES * 60 * 1000;
+        extraUnits = Math.ceil(overtimeMs / blockMs);
+        extraAmount = extraUnits * LOCKER_EXTRA_FEE_PER_BLOCK;
         extraReason = "locker_overtime";
       }
     }
@@ -137,11 +156,14 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
       timestampToMs(booking.programFinishedAt);
 
     if (pickupReadyMs) {
-      const unattendedMs = nowMs - pickupReadyMs;
-      const blockMs = DISINFECT_EXTRA_BLOCK_MINUTES * 60 * 1000;
+      const freePickupUntilMs =
+        pickupReadyMs + DISINFECT_FREE_PICKUP_MINUTES * 60 * 1000;
 
-      if (unattendedMs >= blockMs) {
-        extraUnits = Math.floor(unattendedMs / blockMs);
+      const unattendedOvertimeMs = nowMs - freePickupUntilMs;
+
+      if (unattendedOvertimeMs > 0) {
+        const blockMs = DISINFECT_EXTRA_BLOCK_MINUTES * 60 * 1000;
+        extraUnits = Math.ceil(unattendedOvertimeMs / blockMs);
         extraAmount = extraUnits * DISINFECT_EXTRA_FEE_PER_BLOCK;
         extraReason = "disinfect_unattended_pickup";
       }

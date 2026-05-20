@@ -270,7 +270,8 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Locker Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                ₱25 for 10 hours. Extra ₱10 is added per started extra hour.
+                ₱25 for 10 hours. Extra ₱15 is added per extra hour after the
+                included time.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱25
@@ -280,8 +281,9 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Disinfect Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                ₱25 sanitation support. After sanitation, extra ₱5 is added for
-                every completed 30 minutes if the helmet is left unattended.
+                ₱25 sanitation support. After sanitation is finished, the rider
+                has 30 minutes to retrieve the helmet. Extra ₱10 is added every
+                30 minutes if left unattended.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱25
@@ -291,8 +293,8 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Combined Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                ₱30 for storage and sanitation support. Extra ₱10 is added per
-                started extra hour after 10 hours.
+                ₱30 for storage and sanitation support. Extra ₱15 is added per
+                extra hour after the included 10 hours.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱30
