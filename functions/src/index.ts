@@ -6,9 +6,9 @@ import * as admin from "firebase-admin";
 
 admin.initializeApp({
   credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   }),
   databaseURL: process.env.FIREBASE_DATABASE_URL,
 });
@@ -28,10 +28,30 @@ const DEFAULT_FAN_SEC = Number(
 );
 const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 30);
 
+const LOCKER_INCLUDED_MINUTES = Number(process.env.LOCKER_INCLUDED_MINUTES || 600);
+const LOCKER_EXTRA_FEE_PER_HOUR = Number(
+  process.env.LOCKER_EXTRA_FEE_PER_HOUR || 10
+);
+
+const DISINFECT_EXTRA_BLOCK_MINUTES = Number(
+  process.env.DISINFECT_EXTRA_BLOCK_MINUTES || 30
+);
+const DISINFECT_EXTRA_FEE_PER_BLOCK = Number(
+  process.env.DISINFECT_EXTRA_FEE_PER_BLOCK || 5
+);
+
 type QrPurpose = "booking" | "retrieval";
 
 function tsPlusMs(ts: admin.firestore.Timestamp, ms: number) {
   return admin.firestore.Timestamp.fromMillis(ts.toMillis() + ms);
+}
+
+function timestampToMs(value: any): number | null {
+  if (!value) return null;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+  if (value instanceof Date) return value.getTime();
+  return null;
 }
 
 function requireDeviceKey(req: express.Request) {
@@ -68,6 +88,121 @@ async function requireUserAuth(req: express.Request) {
   } catch {
     return { ok: false as const, status: 401, error: "INVALID_AUTH_TOKEN" };
   }
+}
+
+function amountForService(serviceType: string) {
+  if (serviceType === "combined") return 30;
+  if (serviceType === "locker_only") return 25;
+  if (serviceType === "disinfect_only") return 25;
+  return 0;
+}
+
+function selectedModesForService(serviceType: string) {
+  if (serviceType === "locker_only") return ["locker"];
+  if (serviceType === "disinfect_only") return ["mist", "fan", "uvc"];
+  if (serviceType === "combined") return ["locker", "mist", "fan", "uvc"];
+  return [];
+}
+
+function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
+  const serviceType = booking.serviceType ?? "";
+
+  const baseAmount = amountForService(serviceType);
+
+  let extraAmount = 0;
+  let extraUnits = 0;
+  let extraReason = "none";
+
+  if (serviceType === "locker_only" || serviceType === "combined") {
+    const startedMs =
+      timestampToMs(booking.programStartedAt) ??
+      timestampToMs(booking.startedAt) ??
+      timestampToMs(booking.createdAt);
+
+    if (startedMs) {
+      const includedUntilMs = startedMs + LOCKER_INCLUDED_MINUTES * 60 * 1000;
+      const overtimeMs = nowMs - includedUntilMs;
+
+      if (overtimeMs > 0) {
+        extraUnits = Math.ceil(overtimeMs / (60 * 60 * 1000));
+        extraAmount = extraUnits * LOCKER_EXTRA_FEE_PER_HOUR;
+        extraReason = "locker_overtime";
+      }
+    }
+  }
+
+  if (serviceType === "disinfect_only") {
+    const pickupReadyMs =
+      timestampToMs(booking.pickupReadyAt) ??
+      timestampToMs(booking.programFinishedAt);
+
+    if (pickupReadyMs) {
+      const unattendedMs = nowMs - pickupReadyMs;
+      const blockMs = DISINFECT_EXTRA_BLOCK_MINUTES * 60 * 1000;
+
+      if (unattendedMs >= blockMs) {
+        extraUnits = Math.floor(unattendedMs / blockMs);
+        extraAmount = extraUnits * DISINFECT_EXTRA_FEE_PER_BLOCK;
+        extraReason = "disinfect_unattended_pickup";
+      }
+    }
+  }
+
+  return {
+    baseAmount,
+    extraAmount,
+    extraUnits,
+    extraReason,
+    totalAmount: baseAmount + extraAmount,
+  };
+}
+
+async function refreshBookingChargeIfNeeded(bookingId: string, bookingData: any) {
+  if (!bookingData || !bookingData.serviceType) return bookingData;
+
+  if (
+    bookingData.status === "completed" ||
+    bookingData.status === "cancelled" ||
+    bookingData.status === "expired" ||
+    bookingData.status === "failed"
+  ) {
+    return bookingData;
+  }
+
+  if (bookingData.paymentStatus === "paid" || bookingData.paymentConfirmed === true) {
+    return bookingData;
+  }
+
+  const bill = calculateBookingAmountDue(bookingData);
+
+  const currentAmountDue = Number(bookingData.amountDue ?? 0);
+  const currentExtraCharge = Number(bookingData.extraCharge ?? 0);
+
+  if (
+    currentAmountDue === bill.totalAmount &&
+    currentExtraCharge === bill.extraAmount
+  ) {
+    return bookingData;
+  }
+
+  await db.doc(`bookings/${bookingId}`).update({
+    amountDue: bill.totalAmount,
+    baseAmountDue: bill.baseAmount,
+    extraCharge: bill.extraAmount,
+    extraChargeUnits: bill.extraUnits,
+    extraChargeReason: bill.extraReason,
+    billingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ...bookingData,
+    amountDue: bill.totalAmount,
+    baseAmountDue: bill.baseAmount,
+    extraCharge: bill.extraAmount,
+    extraChargeUnits: bill.extraUnits,
+    extraChargeReason: bill.extraReason,
+  };
 }
 
 function parseQrPayload(body: any): {
@@ -152,18 +287,6 @@ function stepSeconds(step: string) {
   if (step === "fan") return DEFAULT_FAN_SEC;
   if (step === "uvc") return DEFAULT_UV_SEC;
   return 0;
-}
-
-function amountForService(serviceType: string) {
-  if (serviceType === "combined") return 30;
-  return 25;
-}
-
-function selectedModesForService(serviceType: string) {
-  if (serviceType === "locker_only") return ["locker"];
-  if (serviceType === "disinfect_only") return ["mist", "fan", "uvc"];
-  if (serviceType === "combined") return ["locker", "mist", "fan", "uvc"];
-  return [];
 }
 
 async function writeLog(input: {
@@ -312,7 +435,7 @@ async function expireReservedLockerIfNeeded(lockerId: string, lockerData: any) {
 }
 
 app.get("/", (_req, res) => {
-  res.status(200).send("HALO backend is running with new booking-first flow.");
+  res.status(200).send("HALO backend is running.");
 });
 
 app.get("/health", (_req, res) => {
@@ -356,6 +479,8 @@ app.get("/api/device/lockerStatus", async (req, res) => {
           id: bookingSnap.id,
           ...bookingSnap.data(),
         };
+
+        booking = await refreshBookingChargeIfNeeded(bookingSnap.id, booking);
       }
     }
 
@@ -374,6 +499,10 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       serviceType: booking?.serviceType ?? null,
       selectedModes: booking?.selectedModes ?? [],
       amountDue: Number(booking?.amountDue ?? 0),
+      baseAmountDue: Number(booking?.baseAmountDue ?? 0),
+      extraCharge: Number(booking?.extraCharge ?? 0),
+      extraChargeUnits: Number(booking?.extraChargeUnits ?? 0),
+      extraChargeReason: booking?.extraChargeReason ?? "none",
       amountPaid: Number(booking?.amountPaid ?? 0),
       paymentStatus: booking?.paymentStatus ?? null,
       paymentConfirmed: !!booking?.paymentConfirmed,
@@ -744,21 +873,29 @@ app.post("/api/user/startProgram", async (req, res) => {
       }
 
       const serviceType = booking.serviceType as string;
-      const amountDue = Number(booking.amountDue ?? amountForService(serviceType));
-      const durationMin = Number(booking.durationMin ?? 600);
       const now = admin.firestore.Timestamp.now();
+
+      const billing = calculateBookingAmountDue({
+        ...booking,
+        serviceType,
+        programStartedAt: now,
+      });
 
       const commonPatch: Record<string, any> = {
         programStarted: true,
         programStartedAt: admin.firestore.FieldValue.serverTimestamp(),
-        amountDue,
+        amountDue: billing.totalAmount,
+        baseAmountDue: billing.baseAmount,
+        extraCharge: 0,
+        extraChargeUnits: 0,
+        extraChargeReason: "none",
         selectedModes: selectedModesForService(serviceType),
         sequenceName: serviceType,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
       if (serviceType === "locker_only") {
-        const endAt = tsPlusMs(now, Math.max(1, durationMin) * 60 * 1000);
+        const endAt = tsPlusMs(now, LOCKER_INCLUDED_MINUTES * 60 * 1000);
 
         tx.update(bookingRef, {
           ...commonPatch,
@@ -801,6 +938,10 @@ app.post("/api/user/startProgram", async (req, res) => {
         programRunId,
         programStep: "mist",
         programStepEndsAt: stepEndsAt,
+        endAt:
+          serviceType === "combined"
+            ? tsPlusMs(now, LOCKER_INCLUDED_MINUTES * 60 * 1000)
+            : null,
         deviceStatus: {
           lock: true,
           mist: true,
@@ -910,10 +1051,29 @@ app.post("/api/device/programProgress", async (req, res) => {
     };
 
     if (programStep === "awaiting_payment") {
+      const readyTime = admin.firestore.Timestamp.now();
+
+      const bill = calculateBookingAmountDue({
+        ...booking,
+        pickupReadyAt: booking.pickupReadyAt ?? readyTime,
+        programFinishedAt: booking.programFinishedAt ?? readyTime,
+      });
+
       patch.status = "awaiting_payment";
       patch.programFinished = true;
       patch.programFinishedAt = admin.firestore.FieldValue.serverTimestamp();
       patch.programStepEndsAt = null;
+      patch.amountDue = bill.totalAmount;
+      patch.baseAmountDue = bill.baseAmount;
+      patch.extraCharge = bill.extraAmount;
+      patch.extraChargeUnits = bill.extraUnits;
+      patch.extraChargeReason = bill.extraReason;
+      patch.billingUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+      if (!booking.pickupReadyAt) {
+        patch.pickupReadyAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
       patch.deviceStatus = {
         lock: true,
         mist: false,
@@ -989,13 +1149,19 @@ app.post("/api/user/requestPayment", async (req, res) => {
       }
 
       const lockerId = booking.lockerId as string;
+      const bill = calculateBookingAmountDue(booking);
 
       tx.update(bookingRef, {
         status: "awaiting_payment",
         programStep: "awaiting_payment",
         paymentStatus: "unpaid",
         paymentConfirmed: false,
-        amountDue: Number(booking.amountDue ?? amountForService("locker_only")),
+        amountDue: bill.totalAmount,
+        baseAmountDue: bill.baseAmount,
+        extraCharge: bill.extraAmount,
+        extraChargeUnits: bill.extraUnits,
+        extraChargeReason: bill.extraReason,
+        billingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         deviceStatus: {
           lock: true,
@@ -1085,10 +1251,8 @@ app.post("/api/confirmPayment", async (req, res) => {
         return { ok: false as const, error: "NOT_AWAITING_PAYMENT" };
       }
 
-      const requiredAmount = Number(
-        booking.amountDue ?? amountForService(booking.serviceType ?? "locker_only")
-      );
-
+      const bill = calculateBookingAmountDue(booking);
+      const requiredAmount = bill.totalAmount;
       const paid = Number(amountPaid ?? 0);
 
       if (!Number.isFinite(paid) || paid < requiredAmount) {
@@ -1115,6 +1279,10 @@ app.post("/api/confirmPayment", async (req, res) => {
         deviceId: deviceId ?? null,
         amountPaid: paid,
         requiredAmount,
+        baseAmountDue: bill.baseAmount,
+        extraCharge: bill.extraAmount,
+        extraChargeUnits: bill.extraUnits,
+        extraChargeReason: bill.extraReason,
       });
 
       tx.update(bookingRef, {
@@ -1125,6 +1293,12 @@ app.post("/api/confirmPayment", async (req, res) => {
         paymentStatus: "paid",
         paymentProvider: provider ?? "cash",
         paymentPayload,
+        amountDue: bill.totalAmount,
+        baseAmountDue: bill.baseAmount,
+        extraCharge: bill.extraAmount,
+        extraChargeUnits: bill.extraUnits,
+        extraChargeReason: bill.extraReason,
+        billingUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         amountPaid: paid,
         retrievalQrGenerated: true,
         retrievalQrToken,
