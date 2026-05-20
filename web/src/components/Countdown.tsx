@@ -1,15 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 function fmt(ms: number) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${mm}:${ss.toString().padStart(2, "0")}`;
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}H:${minutes.toString().padStart(2, "0")}M:${seconds
+      .toString()
+      .padStart(2, "0")}S`;
+  }
+
+  return `${minutes.toString().padStart(2, "0")}M:${seconds
+    .toString()
+    .padStart(2, "0")}S`;
 }
 
 export default function Countdown({
   targetMs,
-  onElapsed
+  onElapsed,
 }: {
   targetMs: number;
   onElapsed?: () => void;
@@ -27,5 +38,9 @@ export default function Countdown({
     if (left <= 0) onElapsed?.();
   }, [left, onElapsed]);
 
-  return <span className={left <= 0 ? "text-red-300" : "text-slate-100"}>{fmt(left)}</span>;
+  return (
+    <span className={left <= 0 ? "text-red-300" : "text-slate-100"}>
+      {fmt(left)}
+    </span>
+  );
 }
