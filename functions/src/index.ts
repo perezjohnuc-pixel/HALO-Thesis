@@ -28,9 +28,6 @@ const DEFAULT_FAN_SEC = Number(
 );
 const DEFAULT_UV_SEC = Number(process.env.DEFAULT_UV_SECONDS || 30);
 
-// Locker and Combined Mode billing.
-// Actual setting: 600 minutes = 10 hours.
-// Demo setting can be changed in Railway Variables.
 const LOCKER_INCLUDED_MINUTES = Number(
   process.env.LOCKER_INCLUDED_MINUTES || 600
 );
@@ -43,9 +40,6 @@ const LOCKER_EXTRA_FEE_PER_BLOCK = Number(
   process.env.LOCKER_EXTRA_FEE_PER_BLOCK || 15
 );
 
-// Disinfect Mode unattended pickup billing.
-// Actual setting: 30 minutes free pickup time.
-// Demo setting can be changed in Railway Variables.
 const DISINFECT_FREE_PICKUP_MINUTES = Number(
   process.env.DISINFECT_FREE_PICKUP_MINUTES || 30
 );
@@ -124,7 +118,6 @@ function selectedModesForService(serviceType: string) {
 
 function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
   const serviceType = booking.serviceType ?? "";
-
   const baseAmount = amountForService(serviceType);
 
   let extraAmount = 0;
@@ -134,8 +127,7 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
   if (serviceType === "locker_only" || serviceType === "combined") {
     const startedMs =
       timestampToMs(booking.programStartedAt) ??
-      timestampToMs(booking.startedAt) ??
-      timestampToMs(booking.createdAt);
+      timestampToMs(booking.startedAt);
 
     if (startedMs) {
       const includedUntilMs = startedMs + LOCKER_INCLUDED_MINUTES * 60 * 1000;
@@ -906,6 +898,7 @@ app.post("/api/user/startProgram", async (req, res) => {
       const commonPatch: Record<string, any> = {
         programStarted: true,
         programStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
         amountDue: billing.totalAmount,
         baseAmountDue: billing.baseAmount,
         extraCharge: 0,
@@ -1074,6 +1067,10 @@ app.post("/api/device/programProgress", async (req, res) => {
 
     if (programStep === "awaiting_payment") {
       const readyTime = admin.firestore.Timestamp.now();
+      const chargeStartsAt = tsPlusMs(
+        readyTime,
+        DISINFECT_FREE_PICKUP_MINUTES * 60 * 1000
+      );
 
       const bill = calculateBookingAmountDue({
         ...booking,
@@ -1094,6 +1091,13 @@ app.post("/api/device/programProgress", async (req, res) => {
 
       if (!booking.pickupReadyAt) {
         patch.pickupReadyAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      if (
+        booking.serviceType === "disinfect_only" &&
+        !booking.unattendedChargeStartsAt
+      ) {
+        patch.unattendedChargeStartsAt = chargeStartsAt;
       }
 
       patch.deviceStatus = {
