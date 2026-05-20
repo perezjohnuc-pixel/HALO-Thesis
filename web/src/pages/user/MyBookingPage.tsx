@@ -107,6 +107,44 @@ function isTerminalStatus(status?: string | null) {
   );
 }
 
+function isBookingCancelable(booking: Booking | null) {
+  if (!booking) return false;
+
+  const status = booking.status;
+  const paymentConfirmed = (booking as any).paymentConfirmed === true;
+  const programStarted = (booking as any).programStarted === true;
+  const helmetDetected = (booking as any).helmetDetected === true;
+
+  const earlyCancelableStatuses = [
+    "awaiting_booking_qr",
+    "confirmed",
+    "mode_selected",
+    "waiting_for_helmet",
+  ];
+
+  const nonCancelableStatuses = [
+    "in_use",
+    "disinfecting",
+    "awaiting_payment",
+    "paid",
+    "awaiting_retrieval_qr",
+    "retrieval_verified",
+    "completed",
+    "cancelled",
+    "expired",
+    "failed",
+  ];
+
+  return (
+    earlyCancelableStatuses.includes(status) &&
+    !nonCancelableStatuses.includes(status) &&
+    booking.paymentStatus !== "paid" &&
+    paymentConfirmed !== true &&
+    programStarted !== true &&
+    helmetDetected !== true
+  );
+}
+
 export default function MyBookingPage() {
   const { user } = useAuth();
   const uid = user?.uid ?? "";
@@ -182,6 +220,8 @@ export default function MyBookingPage() {
     return `HALO_RETRIEVE|${booking.id}|${booking.lockerId}|${token}`;
   }, [booking]);
 
+  const canCancel = isBookingCancelable(booking);
+
   async function selectMode(option: ModeOption) {
     if (!booking?.id) return;
 
@@ -206,6 +246,13 @@ export default function MyBookingPage() {
 
   async function cancel() {
     if (!booking?.id || !booking?.lockerId) return;
+
+    if (!canCancel) {
+      setErr(
+        "Booking can no longer be cancelled after helmet use or during payment."
+      );
+      return;
+    }
 
     try {
       setErr(null);
@@ -276,15 +323,6 @@ export default function MyBookingPage() {
     typeof booking.amountPaid === "number" ? booking.amountPaid : 0;
   const serviceLabel = getServiceLabel(booking.serviceType);
 
-  const canCancel =
-    [
-      "awaiting_booking_qr",
-      "confirmed",
-      "mode_selected",
-      "waiting_for_helmet",
-      "awaiting_payment",
-    ].includes(booking.status) && booking.paymentStatus !== "paid";
-
   return (
     <div className="space-y-4">
       <Card>
@@ -301,7 +339,6 @@ export default function MyBookingPage() {
             <StatusPill status={booking.status} />
           </div>
 
-          {/* Mobile-safe step sequence */}
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
             <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
               {[
@@ -455,9 +492,12 @@ export default function MyBookingPage() {
             </div>
           )}
 
-          {["mode_selected", "waiting_for_helmet", "in_use", "disinfecting"].includes(
-            booking.status
-          ) && (
+          {[
+            "mode_selected",
+            "waiting_for_helmet",
+            "in_use",
+            "disinfecting",
+          ].includes(booking.status) && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold">Step 3: Use locker</div>
 
@@ -501,6 +541,12 @@ export default function MyBookingPage() {
                 <Badge color="amber">Amount due: ₱{amountDue}</Badge>
                 <Badge color="blue">{getCoinGuide(amountDue)}</Badge>
                 <Badge color="sky">Paid: ₱{amountPaid}</Badge>
+              </div>
+
+              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs text-yellow-100">
+                Cancellation is disabled at this stage because the locker or
+                sanitation service has already been used. Please complete the
+                payment to generate the retrieval QR.
               </div>
             </div>
           )}
