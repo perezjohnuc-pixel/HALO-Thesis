@@ -131,7 +131,6 @@ export default function LockersPage() {
       const bookingRef = doc(collection(db, "bookings"));
       const lockerRef = doc(db, "lockers", locker.id);
 
-      // User has 5 minutes to scan the booking QR.
       const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       const batch = writeBatch(db);
@@ -161,6 +160,11 @@ export default function LockersPage() {
         programStepEndsAt: null,
 
         amountDue: 0,
+        baseAmountDue: 0,
+        extraCharge: 0,
+        extraChargeUnits: 0,
+        extraChargeReason: "none",
+
         amountPaid: 0,
         paymentStatus: "unpaid",
         paymentMethod: "cash",
@@ -188,6 +192,7 @@ export default function LockersPage() {
         completedAt: null,
         cancelledAt: null,
         expiredAt: null,
+        pickupReadyAt: null,
       });
 
       batch.update(lockerRef, {
@@ -219,9 +224,8 @@ export default function LockersPage() {
           </div>
           <div className="text-2xl font-bold">Lockers</div>
           <div className="text-sm text-slate-400">
-            Reserve an available locker first. The service mode is selected after
-            scanning your personal QR. The booking QR must be scanned within 5
-            minutes or the reservation will expire.
+            Reserve an available locker first. The booking QR must be scanned
+            within 5 minutes or the reservation will expire.
           </div>
         </CardHeader>
       </Card>
@@ -232,8 +236,8 @@ export default function LockersPage() {
             <div>
               <div className="text-lg font-bold">Reserve a locker</div>
               <div className="text-sm text-slate-400">
-                New flow: Reserve → Scan personal QR within 5 minutes → Select
-                mode → Use locker → Pay → Scan retrieval QR.
+                Flow: Reserve → Scan personal QR within 5 minutes → Select mode
+                → Use locker → Pay → Scan retrieval QR.
               </div>
             </div>
 
@@ -266,8 +270,7 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Locker Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                Storage only. The locker remains locked until the rider proceeds
-                to payment and retrieval.
+                ₱25 for 10 hours. Extra ₱10 is added per started extra hour.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱25
@@ -277,7 +280,8 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Disinfect Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                Runs mist pump, fan, and UV-C process for disinfection support.
+                ₱25 sanitation support. After sanitation, extra ₱5 is added for
+                every completed 30 minutes if the helmet is left unattended.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱25
@@ -287,8 +291,8 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Combined Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                Uses both secure locker storage and the full disinfection
-                sequence.
+                ₱30 for storage and sanitation support. Extra ₱10 is added per
+                started extra hour after 10 hours.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱30
