@@ -46,7 +46,7 @@ const MODE_OPTIONS: ModeOption[] = [
     durationMin: 30,
     selectedModes: ["mist", "fan", "uvc"],
     description:
-      "Disinfection support using the mist pump, fan, and UV-C lamps. Extra charge applies if helmet is left unattended after sanitation.",
+      "Disinfection support using mist, fan, and UV-C. After sanitation, retrieve within the free pickup time to avoid extra charge.",
   },
   {
     id: "combined",
@@ -55,7 +55,7 @@ const MODE_OPTIONS: ModeOption[] = [
     durationMin: 600,
     selectedModes: ["locker", "mist", "fan", "uvc"],
     description:
-      "Secure storage plus the complete disinfection sequence. Includes 10 hours of locker use.",
+      "Secure storage plus sanitation support. Includes 10 hours of locker use.",
   },
 ];
 
@@ -171,6 +171,7 @@ export default function MyBookingPage() {
   );
   const [busyMode, setBusyMode] = useState<ServiceType | null>(null);
   const [reservationElapsed, setReservationElapsed] = useState(false);
+  const [pickupElapsed, setPickupElapsed] = useState(false);
 
   useEffect(() => {
     if (!uid) return;
@@ -209,6 +210,7 @@ export default function MyBookingPage() {
 
   useEffect(() => {
     setReservationElapsed(false);
+    setPickupElapsed(false);
   }, [booking?.id, (booking as any)?.reservationExpiresAt, booking?.status]);
 
   const bookingQrPayload = useMemo(() => {
@@ -359,6 +361,21 @@ export default function MyBookingPage() {
     booking.status === "awaiting_booking_qr" &&
     reservationExpiresAtMs !== null &&
     (Date.now() >= reservationExpiresAtMs || reservationElapsed);
+
+  const unattendedChargeStartsAtMs = toMs(
+    (booking as any).unattendedChargeStartsAt
+  );
+
+  const showDisinfectPickupTimer =
+    booking.status === "awaiting_payment" &&
+    booking.serviceType === "disinfect_only" &&
+    unattendedChargeStartsAtMs !== null &&
+    booking.paymentStatus !== "paid" &&
+    booking.paymentConfirmed !== true;
+
+  const pickupPenaltyStarted =
+    showDisinfectPickupTimer &&
+    (Date.now() >= unattendedChargeStartsAtMs! || pickupElapsed);
 
   return (
     <div className="space-y-4">
@@ -606,6 +623,37 @@ export default function MyBookingPage() {
                   the payment when the required amount is reached.
                 </div>
               </div>
+
+              {showDisinfectPickupTimer && (
+                <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-cyan-100">
+                        Free pickup time remaining
+                      </div>
+                      <div className="text-xs text-cyan-200/80">
+                        Retrieve and pay before this timer ends to avoid the
+                        unattended helmet charge.
+                      </div>
+                    </div>
+
+                    <div className="text-2xl font-extrabold text-white">
+                      <Countdown
+                        targetMs={unattendedChargeStartsAtMs}
+                        onElapsed={() => setPickupElapsed(true)}
+                      />
+                    </div>
+                  </div>
+
+                  {pickupPenaltyStarted && (
+                    <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+                      Extra unattended pickup charge may now apply. Refresh the
+                      page or wait for the system update to show the latest
+                      amount due.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 <Badge color="amber">Amount due: ₱{amountDue}</Badge>
