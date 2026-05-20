@@ -193,6 +193,7 @@ export default function LockersPage() {
         cancelledAt: null,
         expiredAt: null,
         pickupReadyAt: null,
+        unattendedChargeStartsAt: null,
       });
 
       batch.update(lockerRef, {
