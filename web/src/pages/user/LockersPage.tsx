@@ -130,6 +130,8 @@ export default function LockersPage() {
 
       const bookingRef = doc(collection(db, "bookings"));
       const lockerRef = doc(db, "lockers", locker.id);
+
+      // User has 5 minutes to scan the booking QR.
       const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       const batch = writeBatch(db);
@@ -181,9 +183,11 @@ export default function LockersPage() {
 
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        reservationExpiresAt,
         startedAt: null,
         completedAt: null,
         cancelledAt: null,
+        expiredAt: null,
       });
 
       batch.update(lockerRef, {
@@ -195,11 +199,6 @@ export default function LockersPage() {
         reservationExpiresAt,
         pendingPaymentExpiresAt: null,
         updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        startedAt: null,
-        completedAt: null,
-        cancelledAt: null,
-        expiredAt: null,
       });
 
       await batch.commit();
@@ -221,7 +220,8 @@ export default function LockersPage() {
           <div className="text-2xl font-bold">Lockers</div>
           <div className="text-sm text-slate-400">
             Reserve an available locker first. The service mode is selected after
-            scanning your personal QR.
+            scanning your personal QR. The booking QR must be scanned within 5
+            minutes or the reservation will expire.
           </div>
         </CardHeader>
       </Card>
@@ -232,8 +232,8 @@ export default function LockersPage() {
             <div>
               <div className="text-lg font-bold">Reserve a locker</div>
               <div className="text-sm text-slate-400">
-                New flow: Reserve → Scan personal QR → Select mode → Use locker
-                → Pay → Scan retrieval QR.
+                New flow: Reserve → Scan personal QR within 5 minutes → Select
+                mode → Use locker → Pay → Scan retrieval QR.
               </div>
             </div>
 
