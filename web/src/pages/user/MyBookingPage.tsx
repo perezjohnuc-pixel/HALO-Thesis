@@ -59,6 +59,10 @@ const MODE_OPTIONS: ModeOption[] = [
   },
 ];
 
+const DISINFECT_FREE_PICKUP_MINUTES = Number(
+  import.meta.env.VITE_DISINFECT_FREE_PICKUP_MINUTES ?? 30
+);
+
 function getStepIndex(status?: string | null) {
   if (status === "awaiting_booking_qr") return 0;
   if (status === "confirmed") return 1;
@@ -211,7 +215,16 @@ export default function MyBookingPage() {
   useEffect(() => {
     setReservationElapsed(false);
     setPickupElapsed(false);
-  }, [booking?.id, (booking as any)?.reservationExpiresAt, booking?.status]);
+  }, [
+    booking?.id,
+    (booking as any)?.reservationExpiresAt,
+    (booking as any)?.unattendedChargeStartsAt,
+    (booking as any)?.pickupReadyAt,
+    (booking as any)?.programFinishedAt,
+    (booking as any)?.billingUpdatedAt,
+    (booking as any)?.updatedAt,
+    booking?.status,
+  ]);
 
   const bookingQrPayload = useMemo(() => {
     if (!booking?.id || !booking?.lockerId || !booking?.userId) return null;
@@ -345,14 +358,17 @@ export default function MyBookingPage() {
   const amountDue = typeof booking.amountDue === "number" ? booking.amountDue : 0;
   const amountPaid =
     typeof booking.amountPaid === "number" ? booking.amountPaid : 0;
+
   const baseAmountDue =
     typeof (booking as any).baseAmountDue === "number"
       ? (booking as any).baseAmountDue
       : amountDue;
+
   const extraCharge =
     typeof (booking as any).extraCharge === "number"
       ? (booking as any).extraCharge
       : 0;
+
   const extraChargeReason = (booking as any).extraChargeReason ?? "none";
   const serviceLabel = getServiceLabel(booking.serviceType);
 
@@ -362,9 +378,23 @@ export default function MyBookingPage() {
     reservationExpiresAtMs !== null &&
     (Date.now() >= reservationExpiresAtMs || reservationElapsed);
 
-  const unattendedChargeStartsAtMs = toMs(
-    (booking as any).unattendedChargeStartsAt
-  );
+  const pickupReadyAtMs = toMs((booking as any).pickupReadyAt);
+  const programFinishedAtMs = toMs((booking as any).programFinishedAt);
+  const billingUpdatedAtMs = toMs((booking as any).billingUpdatedAt);
+  const updatedAtMs = toMs((booking as any).updatedAt);
+
+  const disinfectPickupBaseMs =
+    pickupReadyAtMs ??
+    programFinishedAtMs ??
+    billingUpdatedAtMs ??
+    updatedAtMs ??
+    null;
+
+  const unattendedChargeStartsAtMs =
+    toMs((booking as any).unattendedChargeStartsAt) ??
+    (disinfectPickupBaseMs
+      ? disinfectPickupBaseMs + DISINFECT_FREE_PICKUP_MINUTES * 60 * 1000
+      : null);
 
   const showDisinfectPickupTimer =
     booking.status === "awaiting_payment" &&
@@ -375,7 +405,8 @@ export default function MyBookingPage() {
 
   const pickupPenaltyStarted =
     showDisinfectPickupTimer &&
-    (Date.now() >= unattendedChargeStartsAtMs! || pickupElapsed);
+    unattendedChargeStartsAtMs !== null &&
+    (Date.now() >= unattendedChargeStartsAtMs || pickupElapsed);
 
   return (
     <div className="space-y-4">
@@ -624,16 +655,18 @@ export default function MyBookingPage() {
                 </div>
               </div>
 
-              {showDisinfectPickupTimer && (
+              {showDisinfectPickupTimer && unattendedChargeStartsAtMs !== null && (
                 <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
                       <div className="text-sm font-semibold text-cyan-100">
-                        Free pickup time remaining
+                        Pickup countdown before extra charge
                       </div>
+
                       <div className="text-xs text-cyan-200/80">
-                        Retrieve and pay before this timer ends to avoid the
-                        unattended helmet charge.
+                        Retrieve and pay before this timer ends. If the helmet is
+                        left unattended after the countdown, an additional ₱10
+                        will be added every 30 minutes.
                       </div>
                     </div>
 
@@ -647,9 +680,9 @@ export default function MyBookingPage() {
 
                   {pickupPenaltyStarted && (
                     <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
-                      Extra unattended pickup charge may now apply. Refresh the
-                      page or wait for the system update to show the latest
-                      amount due.
+                      Pickup time has ended. Extra unattended helmet charge may
+                      now apply. Refresh the page or wait for the system update
+                      to show the latest amount due.
                     </div>
                   )}
                 </div>
