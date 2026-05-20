@@ -180,6 +180,137 @@ async function writeLog(input: {
   });
 }
 
+async function expireReservedLockerIfNeeded(lockerId: string, lockerData: any) {
+  const currentBookingId = lockerData.currentBookingId ?? null;
+
+  if (!currentBookingId) {
+    return { expired: false, locker: lockerData };
+  }
+
+  const lockerStatus = lockerData.status ?? "";
+  const reservationExpiresAt = lockerData.reservationExpiresAt;
+
+  if (lockerStatus !== "reserved") {
+    return { expired: false, locker: lockerData };
+  }
+
+  if (!reservationExpiresAt?.toMillis) {
+    return { expired: false, locker: lockerData };
+  }
+
+  const nowMs = Date.now();
+  const expiresMs = reservationExpiresAt.toMillis();
+
+  if (nowMs < expiresMs) {
+    return { expired: false, locker: lockerData };
+  }
+
+  const lockerRef = db.doc(`lockers/${lockerId}`);
+  const bookingRef = db.doc(`bookings/${currentBookingId}`);
+
+  const result = await db.runTransaction(async (tx) => {
+    const [freshLockerSnap, bookingSnap] = await Promise.all([
+      tx.get(lockerRef),
+      tx.get(bookingRef),
+    ]);
+
+    if (!freshLockerSnap.exists) {
+      return { expired: false, locker: lockerData };
+    }
+
+    const freshLocker = freshLockerSnap.data() as any;
+
+    if (!bookingSnap.exists) {
+      tx.update(lockerRef, {
+        status: "available",
+        occupied: false,
+        pendingPayment: false,
+        currentBookingId: null,
+        reservedByUserId: null,
+        reservationExpiresAt: null,
+        pendingPaymentExpiresAt: null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {
+        expired: true,
+        locker: {
+          ...freshLocker,
+          status: "available",
+          occupied: false,
+          pendingPayment: false,
+          currentBookingId: null,
+          reservedByUserId: null,
+          reservationExpiresAt: null,
+          pendingPaymentExpiresAt: null,
+        },
+      };
+    }
+
+    const booking = bookingSnap.data() as any;
+
+    const canExpire =
+      freshLocker.status === "reserved" &&
+      freshLocker.currentBookingId === currentBookingId &&
+      booking.status === "awaiting_booking_qr" &&
+      booking.bookingQrVerified !== true;
+
+    if (!canExpire) {
+      return { expired: false, locker: freshLocker };
+    }
+
+    tx.update(bookingRef, {
+      status: "expired",
+      expiredAt: admin.firestore.FieldValue.serverTimestamp(),
+      programStep: "expired",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      deviceStatus: {
+        lock: true,
+        mist: false,
+        fan: false,
+        uvc: false,
+      },
+    });
+
+    tx.update(lockerRef, {
+      status: "available",
+      occupied: false,
+      pendingPayment: false,
+      currentBookingId: null,
+      reservedByUserId: null,
+      reservationExpiresAt: null,
+      pendingPaymentExpiresAt: null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      expired: true,
+      locker: {
+        ...freshLocker,
+        status: "available",
+        occupied: false,
+        pendingPayment: false,
+        currentBookingId: null,
+        reservedByUserId: null,
+        reservationExpiresAt: null,
+        pendingPaymentExpiresAt: null,
+      },
+    };
+  });
+
+  if (result.expired) {
+    await writeLog({
+      type: "BOOKING",
+      message: "Reservation expired because booking QR was not scanned within 5 minutes.",
+      lockerId,
+      bookingId: currentBookingId,
+      userId: lockerData.reservedByUserId ?? null,
+    }).catch(() => {});
+  }
+
+  return result;
+}
+
 app.get("/", (_req, res) => {
   res.status(200).send("HALO backend is running with new booking-first flow.");
 });
@@ -208,7 +339,11 @@ app.get("/api/device/lockerStatus", async (req, res) => {
       return res.status(404).json({ ok: false, error: "LOCKER_NOT_FOUND" });
     }
 
-    const locker = lockerSnap.data() as any;
+    let locker = lockerSnap.data() as any;
+
+    const expirationResult = await expireReservedLockerIfNeeded(lockerId, locker);
+    locker = expirationResult.locker;
+
     const currentBookingId = locker.currentBookingId ?? null;
 
     let booking: any = null;
@@ -226,6 +361,7 @@ app.get("/api/device/lockerStatus", async (req, res) => {
 
     return res.json({
       ok: true,
+      reservationExpired: expirationResult.expired,
 
       lockerId,
       lockerStatus: locker.status ?? "unknown",
@@ -316,6 +452,44 @@ app.post("/api/device/verifyQr", async (req, res) => {
       if (type === "booking") {
         if (booking.status !== "awaiting_booking_qr") {
           return { ok: false as const, error: "BOOKING_QR_NOT_ALLOWED" };
+        }
+
+        const reservationExpiresAt =
+          booking.reservationExpiresAt ?? locker.reservationExpiresAt ?? null;
+
+        if (
+          reservationExpiresAt?.toMillis &&
+          Date.now() >= reservationExpiresAt.toMillis()
+        ) {
+          tx.update(bookingRef, {
+            status: "expired",
+            expiredAt: admin.firestore.FieldValue.serverTimestamp(),
+            programStep: "expired",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            deviceStatus: {
+              lock: true,
+              mist: false,
+              fan: false,
+              uvc: false,
+            },
+          });
+
+          tx.update(lockerRef, {
+            status: "available",
+            occupied: false,
+            pendingPayment: false,
+            currentBookingId: null,
+            reservedByUserId: null,
+            reservationExpiresAt: null,
+            pendingPaymentExpiresAt: null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          return {
+            ok: false as const,
+            error: "RESERVATION_EXPIRED",
+            message: "Booking QR was not scanned within 5 minutes.",
+          };
         }
 
         if (token !== booking.userId && token !== bookingId) {
@@ -478,8 +652,10 @@ app.post("/api/device/sensorStatus", async (req, res) => {
       booking.status === "mode_selected" ||
       booking.status === "waiting_for_helmet"
     ) {
-      patch.status = helmetDetected && safeDoorClosed ? "mode_selected" : "waiting_for_helmet";
-      patch.programStep = helmetDetected && safeDoorClosed ? "ready_to_start" : "waiting_for_helmet";
+      patch.status =
+        helmetDetected && safeDoorClosed ? "mode_selected" : "waiting_for_helmet";
+      patch.programStep =
+        helmetDetected && safeDoorClosed ? "ready_to_start" : "waiting_for_helmet";
     }
 
     if (booking.status === "retrieval_verified" && helmetDetected === false) {
@@ -1228,7 +1404,7 @@ app.post("/api/user/complete", async (req, res) => {
 app.post("/api/expireNow", async (_req, res) => {
   return res.json({
     ok: true,
-    message: "Manual expiration is not used in the new flow.",
+    message: "Automatic reservation expiration is handled by lockerStatus and verifyQr.",
   });
 });
 
