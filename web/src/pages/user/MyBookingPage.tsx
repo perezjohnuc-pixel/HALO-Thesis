@@ -18,6 +18,7 @@ import { useAuth } from "../../lib/auth";
 import type { Booking, Locker, ServiceType } from "../../lib/types";
 import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import StatusPill from "../../components/StatusPill";
+import Countdown from "../../components/Countdown";
 
 type ModeOption = {
   id: ServiceType;
@@ -35,7 +36,8 @@ const MODE_OPTIONS: ModeOption[] = [
     amountDue: 25,
     durationMin: 600,
     selectedModes: ["locker"],
-    description: "Regular locker storage only. No mist, fan, or UV-C sequence.",
+    description:
+      "Regular locker storage only. Includes 10 hours of locker use. Extra charge applies if exceeded.",
   },
   {
     id: "disinfect_only",
@@ -43,7 +45,8 @@ const MODE_OPTIONS: ModeOption[] = [
     amountDue: 25,
     durationMin: 30,
     selectedModes: ["mist", "fan", "uvc"],
-    description: "Disinfection support using the mist pump, fan, and UV-C lamps.",
+    description:
+      "Disinfection support using the mist pump, fan, and UV-C lamps. Extra charge applies if helmet is left unattended after sanitation.",
   },
   {
     id: "combined",
@@ -51,7 +54,8 @@ const MODE_OPTIONS: ModeOption[] = [
     amountDue: 30,
     durationMin: 600,
     selectedModes: ["locker", "mist", "fan", "uvc"],
-    description: "Secure storage plus the complete disinfection sequence.",
+    description:
+      "Secure storage plus the complete disinfection sequence. Includes 10 hours of locker use.",
   },
 ];
 
@@ -94,8 +98,9 @@ function getServiceLabel(serviceType?: string | null) {
 }
 
 function getCoinGuide(amount: number) {
-  if (amount === 30) return "Insert six 5-peso coins";
-  return "Insert five 5-peso coins";
+  if (amount <= 0) return "Waiting for amount";
+  if (amount % 5 === 0) return `Insert ${amount / 5} five-peso coin(s)`;
+  return "Insert coins until amount is reached";
 }
 
 function isTerminalStatus(status?: string | null) {
@@ -105,6 +110,14 @@ function isTerminalStatus(status?: string | null) {
     status === "expired" ||
     status === "failed"
   );
+}
+
+function toMs(ts: any): number | null {
+  if (!ts) return null;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (typeof ts.seconds === "number") return ts.seconds * 1000;
+  if (ts instanceof Date) return ts.getTime();
+  return null;
 }
 
 function isBookingCancelable(booking: Booking | null) {
@@ -157,6 +170,7 @@ export default function MyBookingPage() {
     "idle"
   );
   const [busyMode, setBusyMode] = useState<ServiceType | null>(null);
+  const [reservationElapsed, setReservationElapsed] = useState(false);
 
   useEffect(() => {
     if (!uid) return;
@@ -192,6 +206,10 @@ export default function MyBookingPage() {
       );
     });
   }, [booking?.lockerId]);
+
+  useEffect(() => {
+    setReservationElapsed(false);
+  }, [booking?.id, (booking as any)?.reservationExpiresAt, booking?.status]);
 
   const bookingQrPayload = useMemo(() => {
     if (!booking?.id || !booking?.lockerId || !booking?.userId) return null;
@@ -234,6 +252,10 @@ export default function MyBookingPage() {
         serviceType: option.id,
         selectedModes: option.selectedModes,
         amountDue: option.amountDue,
+        baseAmountDue: option.amountDue,
+        extraCharge: 0,
+        extraChargeUnits: 0,
+        extraChargeReason: "none",
         durationMin: option.durationMin,
         updatedAt: serverTimestamp(),
       } as any);
@@ -321,7 +343,22 @@ export default function MyBookingPage() {
   const amountDue = typeof booking.amountDue === "number" ? booking.amountDue : 0;
   const amountPaid =
     typeof booking.amountPaid === "number" ? booking.amountPaid : 0;
+  const baseAmountDue =
+    typeof (booking as any).baseAmountDue === "number"
+      ? (booking as any).baseAmountDue
+      : amountDue;
+  const extraCharge =
+    typeof (booking as any).extraCharge === "number"
+      ? (booking as any).extraCharge
+      : 0;
+  const extraChargeReason = (booking as any).extraChargeReason ?? "none";
   const serviceLabel = getServiceLabel(booking.serviceType);
+
+  const reservationExpiresAtMs = toMs((booking as any).reservationExpiresAt);
+  const reservationExpired =
+    booking.status === "awaiting_booking_qr" &&
+    reservationExpiresAtMs !== null &&
+    (Date.now() >= reservationExpiresAtMs || reservationElapsed);
 
   return (
     <div className="space-y-4">
@@ -424,6 +461,39 @@ export default function MyBookingPage() {
                   electromagnetic lock will unlock for initial access and mode
                   selection.
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-yellow-100">
+                      QR verification time limit
+                    </div>
+                    <div className="text-xs text-yellow-200/80">
+                      Scan this booking QR within 5 minutes or the reservation
+                      will expire and the locker will return to available.
+                    </div>
+                  </div>
+
+                  <div className="text-2xl font-extrabold text-white">
+                    {reservationExpiresAtMs ? (
+                      <Countdown
+                        targetMs={reservationExpiresAtMs}
+                        onElapsed={() => setReservationElapsed(true)}
+                      />
+                    ) : (
+                      "05M:00S"
+                    )}
+                  </div>
+                </div>
+
+                {reservationExpired && (
+                  <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+                    Reservation time has expired. Refresh the page or go back to
+                    Lockers to check if the locker has returned to available
+                    status.
+                  </div>
+                )}
               </div>
 
               <div className="grid items-start gap-4 md:grid-cols-2">
@@ -542,6 +612,16 @@ export default function MyBookingPage() {
                 <Badge color="blue">{getCoinGuide(amountDue)}</Badge>
                 <Badge color="sky">Paid: ₱{amountPaid}</Badge>
               </div>
+
+              {(extraCharge > 0 || baseAmountDue > 0) && (
+                <div className="rounded-xl border border-slate-700/50 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <div>Base amount: ₱{baseAmountDue}</div>
+                  <div>Additional charge: ₱{extraCharge}</div>
+                  {extraChargeReason !== "none" && (
+                    <div>Reason: {extraChargeReason.replaceAll("_", " ")}</div>
+                  )}
+                </div>
+              )}
 
               <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs text-yellow-100">
                 Cancellation is disabled at this stage because the locker or
