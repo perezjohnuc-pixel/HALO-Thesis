@@ -130,7 +130,7 @@ export default function LockersPage() {
 
       const bookingRef = doc(collection(db, "bookings"));
       const lockerRef = doc(db, "lockers", locker.id);
-      const reservationExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      const reservationExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       const batch = writeBatch(db);
 
@@ -195,6 +195,11 @@ export default function LockersPage() {
         reservationExpiresAt,
         pendingPaymentExpiresAt: null,
         updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        expiredAt: null,
       });
 
       await batch.commit();
