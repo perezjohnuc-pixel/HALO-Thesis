@@ -40,6 +40,18 @@ const LOCKER_EXTRA_FEE_PER_BLOCK = Number(
   process.env.LOCKER_EXTRA_FEE_PER_BLOCK || 15
 );
 
+const COMBINED_INCLUDED_MINUTES = Number(
+  process.env.COMBINED_INCLUDED_MINUTES || 5
+);
+
+const COMBINED_EXTRA_BLOCK_MINUTES = Number(
+  process.env.COMBINED_EXTRA_BLOCK_MINUTES || 3
+);
+
+const COMBINED_EXTRA_FEE_PER_BLOCK = Number(
+  process.env.COMBINED_EXTRA_FEE_PER_BLOCK || 15
+);
+
 const DISINFECT_FREE_PICKUP_MINUTES = Number(
   process.env.DISINFECT_FREE_PICKUP_MINUTES || 30
 );
@@ -130,14 +142,32 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
       timestampToMs(booking.startedAt);
 
     if (startedMs) {
-      const includedUntilMs = startedMs + LOCKER_INCLUDED_MINUTES * 60 * 1000;
+      const includedMinutes =
+        serviceType === "combined"
+          ? COMBINED_INCLUDED_MINUTES
+          : LOCKER_INCLUDED_MINUTES;
+
+      const extraBlockMinutes =
+        serviceType === "combined"
+          ? COMBINED_EXTRA_BLOCK_MINUTES
+          : LOCKER_EXTRA_BLOCK_MINUTES;
+
+      const extraFeePerBlock =
+        serviceType === "combined"
+          ? COMBINED_EXTRA_FEE_PER_BLOCK
+          : LOCKER_EXTRA_FEE_PER_BLOCK;
+
+      const includedUntilMs = startedMs + includedMinutes * 60 * 1000;
       const overtimeMs = nowMs - includedUntilMs;
 
       if (overtimeMs > 0) {
-        const blockMs = LOCKER_EXTRA_BLOCK_MINUTES * 60 * 1000;
+        const blockMs = extraBlockMinutes * 60 * 1000;
         extraUnits = Math.ceil(overtimeMs / blockMs);
-        extraAmount = extraUnits * LOCKER_EXTRA_FEE_PER_BLOCK;
-        extraReason = "locker_overtime";
+        extraAmount = extraUnits * extraFeePerBlock;
+        extraReason =
+          serviceType === "combined"
+            ? "combined_overtime_penalty"
+            : "locker_overtime";
       }
     }
   }
@@ -955,7 +985,7 @@ app.post("/api/user/startProgram", async (req, res) => {
         programStepEndsAt: stepEndsAt,
         endAt:
           serviceType === "combined"
-            ? tsPlusMs(now, LOCKER_INCLUDED_MINUTES * 60 * 1000)
+            ? tsPlusMs(now, COMBINED_INCLUDED_MINUTES * 60 * 1000)
             : null,
         deviceStatus: {
           lock: true,
