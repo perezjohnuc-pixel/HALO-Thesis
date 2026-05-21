@@ -37,7 +37,7 @@ const MODE_OPTIONS: ModeOption[] = [
     durationMin: 600,
     selectedModes: ["locker"],
     description:
-      "Regular locker storage only. Includes 10 hours of locker use. Extra charge applies if exceeded.",
+      "Regular locker storage only. Includes the allowed locker time and a grace period before penalty.",
   },
   {
     id: "disinfect_only",
@@ -55,12 +55,24 @@ const MODE_OPTIONS: ModeOption[] = [
     durationMin: 5,
     selectedModes: ["locker", "mist", "fan", "uvc"],
     description:
-      "Secure storage plus sanitation support. Includes 5 minutes of locker use for demo. After that, a ₱15 penalty applies per 3-minute block.",
+      "Secure storage plus sanitation support. Includes 5 minutes of locker use, then a 1-minute grace period before penalty.",
   },
 ];
 
 const DISINFECT_FREE_PICKUP_MINUTES = Number(
   import.meta.env.VITE_DISINFECT_FREE_PICKUP_MINUTES ?? 30
+);
+
+const LOCKER_GRACE_MINUTES = Number(
+  import.meta.env.VITE_LOCKER_GRACE_MINUTES ?? 1
+);
+
+const LOCKER_EXTRA_BLOCK_MINUTES = Number(
+  import.meta.env.VITE_LOCKER_EXTRA_BLOCK_MINUTES ?? 1
+);
+
+const COMBINED_GRACE_MINUTES = Number(
+  import.meta.env.VITE_COMBINED_GRACE_MINUTES ?? 1
 );
 
 const COMBINED_EXTRA_BLOCK_MINUTES = Number(
@@ -180,7 +192,7 @@ export default function MyBookingPage() {
   const [busyMode, setBusyMode] = useState<ServiceType | null>(null);
   const [reservationElapsed, setReservationElapsed] = useState(false);
   const [pickupElapsed, setPickupElapsed] = useState(false);
-  const [combinedPenaltyTick, setCombinedPenaltyTick] = useState(0);
+  const [timeWindowTick, setTimeWindowTick] = useState(0);
 
   useEffect(() => {
     if (!uid) return;
@@ -220,7 +232,7 @@ export default function MyBookingPage() {
   useEffect(() => {
     setReservationElapsed(false);
     setPickupElapsed(false);
-    setCombinedPenaltyTick(0);
+    setTimeWindowTick(0);
   }, [
     booking?.id,
     (booking as any)?.reservationExpiresAt,
@@ -416,23 +428,54 @@ export default function MyBookingPage() {
     (Date.now() >= unattendedChargeStartsAtMs || pickupElapsed);
 
   const endAtMs = toMs((booking as any).endAt);
-  const nowMs = Date.now() + combinedPenaltyTick * 0;
-  const combinedPenaltyBlockMs = COMBINED_EXTRA_BLOCK_MINUTES * 60 * 1000;
+  const nowMs = Date.now() + timeWindowTick * 0;
 
-  const combinedLockerTimeExpired =
-    booking.serviceType === "combined" &&
+  const isLockerBillingMode =
+    (booking.serviceType === "locker_only" ||
+      booking.serviceType === "combined") &&
     booking.status === "awaiting_payment" &&
-    endAtMs !== null &&
-    nowMs >= endAtMs &&
     booking.paymentStatus !== "paid" &&
     booking.paymentConfirmed !== true;
 
-  const combinedPenaltyTargetMs =
-    combinedLockerTimeExpired && endAtMs !== null
-      ? endAtMs +
-        (Math.floor((nowMs - endAtMs) / combinedPenaltyBlockMs) + 1) *
-          combinedPenaltyBlockMs
+  const lockerGraceMinutes =
+    booking.serviceType === "combined"
+      ? COMBINED_GRACE_MINUTES
+      : LOCKER_GRACE_MINUTES;
+
+  const lockerExtraBlockMinutes =
+    booking.serviceType === "combined"
+      ? COMBINED_EXTRA_BLOCK_MINUTES
+      : LOCKER_EXTRA_BLOCK_MINUTES;
+
+  const lockerPenaltyBlockMs = lockerExtraBlockMinutes * 60 * 1000;
+
+  const includedTimeEnded =
+    isLockerBillingMode && endAtMs !== null && nowMs >= endAtMs;
+
+  const graceEndsAtMs =
+    includedTimeEnded && endAtMs !== null
+      ? endAtMs + lockerGraceMinutes * 60 * 1000
       : null;
+
+  const lockerInGracePeriod =
+    includedTimeEnded &&
+    graceEndsAtMs !== null &&
+    nowMs < graceEndsAtMs;
+
+  const lockerPenaltyActive =
+    includedTimeEnded &&
+    graceEndsAtMs !== null &&
+    nowMs >= graceEndsAtMs;
+
+  const lockerPenaltyTargetMs =
+    lockerPenaltyActive && graceEndsAtMs !== null
+      ? graceEndsAtMs +
+        (Math.floor((nowMs - graceEndsAtMs) / lockerPenaltyBlockMs) + 1) *
+          lockerPenaltyBlockMs
+      : null;
+
+  const billingModeLabel =
+    booking.serviceType === "combined" ? "Combined Mode" : "Locker Mode";
 
   return (
     <div className="space-y-4">
@@ -714,25 +757,50 @@ export default function MyBookingPage() {
                 </div>
               )}
 
-              {combinedLockerTimeExpired && combinedPenaltyTargetMs !== null && (
-                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+              {lockerInGracePeriod && graceEndsAtMs !== null && (
+                <div className="rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-red-100">
-                        Combined Mode penalty countdown
+                      <div className="text-sm font-semibold text-yellow-100">
+                        {billingModeLabel} grace countdown
                       </div>
 
-                      <div className="text-xs text-red-200/80">
-                        The 5-minute included locker time has ended. A ₱15
-                        additional charge is applied per 3-minute penalty block
-                        until payment and retrieval are completed.
+                      <div className="text-xs text-yellow-200/80">
+                        The included locker time has ended. You still have a
+                        1-minute grace period before the additional penalty
+                        amount is added.
                       </div>
                     </div>
 
                     <div className="text-2xl font-extrabold text-white">
                       <Countdown
-                        targetMs={combinedPenaltyTargetMs}
-                        onElapsed={() => setCombinedPenaltyTick((v) => v + 1)}
+                        targetMs={graceEndsAtMs}
+                        onElapsed={() => setTimeWindowTick((v) => v + 1)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {lockerPenaltyActive && lockerPenaltyTargetMs !== null && (
+                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-red-100">
+                        {billingModeLabel} penalty countdown
+                      </div>
+
+                      <div className="text-xs text-red-200/80">
+                        The 1-minute grace period has ended. A penalty is now
+                        added per penalty block until payment and retrieval are
+                        completed.
+                      </div>
+                    </div>
+
+                    <div className="text-2xl font-extrabold text-white">
+                      <Countdown
+                        targetMs={lockerPenaltyTargetMs}
+                        onElapsed={() => setTimeWindowTick((v) => v + 1)}
                       />
                     </div>
                   </div>
