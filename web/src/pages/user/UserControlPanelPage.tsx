@@ -12,6 +12,10 @@ import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import Countdown from "../../components/Countdown";
 import StatusPill from "../../components/StatusPill";
 
+const COMBINED_EXTRA_BLOCK_MINUTES = Number(
+  import.meta.env.VITE_COMBINED_EXTRA_BLOCK_MINUTES ?? 3
+);
+
 type BookingDoc = {
   id?: string;
   userId?: string;
@@ -104,6 +108,7 @@ export default function UserControlPanelPage() {
   const [busyComplete, setBusyComplete] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [penaltyTick, setPenaltyTick] = useState(0);
 
   useEffect(() => {
     if (!bookingId) return;
@@ -174,6 +179,30 @@ export default function UserControlPanelPage() {
     booking?.programStep === "open" &&
     booking?.helmetDetected === false &&
     booking?.status === "retrieval_verified";
+
+  const nowMs = Date.now() + penaltyTick * 0;
+  const combinedPenaltyBlockMs = COMBINED_EXTRA_BLOCK_MINUTES * 60 * 1000;
+
+  const showLockerTimer =
+    (booking?.serviceType === "locker_only" ||
+      booking?.serviceType === "combined") &&
+    endAtMs !== null;
+
+  const combinedLockerTimeExpired =
+    booking?.serviceType === "combined" &&
+    endAtMs !== null &&
+    nowMs >= endAtMs &&
+    paymentConfirmed !== true &&
+    booking?.status !== "completed" &&
+    booking?.status !== "cancelled" &&
+    booking?.status !== "expired";
+
+  const combinedPenaltyTargetMs =
+    combinedLockerTimeExpired && endAtMs !== null
+      ? endAtMs +
+        (Math.floor((nowMs - endAtMs) / combinedPenaltyBlockMs) + 1) *
+          combinedPenaltyBlockMs
+      : null;
 
   async function startProgram() {
     if (!bookingId || !booking) return;
@@ -288,11 +317,6 @@ export default function UserControlPanelPage() {
   const serviceLabel = getServiceLabel(booking.serviceType);
   const programStep = booking.programStep ?? "—";
 
-  const showLockerTimer =
-    (booking.serviceType === "locker_only" ||
-      booking.serviceType === "combined") &&
-    endAtMs;
-
   return (
     <div className="space-y-4">
       <Card>
@@ -337,11 +361,43 @@ export default function UserControlPanelPage() {
             </div>
           </div>
 
-          {showLockerTimer && (
+          {showLockerTimer && !combinedLockerTimeExpired && (
             <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
-              <div className="text-sm text-blue-100">Locker time remaining</div>
+              <div className="text-sm text-blue-100">
+                {booking.serviceType === "combined"
+                  ? "Combined Mode locker time remaining"
+                  : "Locker time remaining"}
+              </div>
+
               <div className="mt-2 text-3xl font-extrabold text-white">
                 <Countdown targetMs={endAtMs!} />
+              </div>
+
+              {booking.serviceType === "combined" && (
+                <div className="mt-2 text-xs text-blue-100/80">
+                  Combined Mode has 5 minutes of included locker time for demo.
+                </div>
+              )}
+            </div>
+          )}
+
+          {combinedLockerTimeExpired && combinedPenaltyTargetMs !== null && (
+            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+              <div className="text-sm font-semibold text-red-100">
+                Combined Mode penalty countdown
+              </div>
+
+              <div className="mt-1 text-xs text-red-200/80">
+                The 5-minute included locker time has ended. A ₱15 penalty is
+                applied per 3-minute penalty block until payment and retrieval
+                are completed.
+              </div>
+
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown
+                  targetMs={combinedPenaltyTargetMs}
+                  onElapsed={() => setPenaltyTick((v) => v + 1)}
+                />
               </div>
             </div>
           )}
