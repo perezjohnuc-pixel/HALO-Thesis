@@ -271,8 +271,9 @@ export default function LockersPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <div className="font-semibold text-slate-100">Locker Mode</div>
               <div className="mt-2 text-sm text-slate-400">
-                ₱25 for 10 hours. Extra ₱15 is added per extra hour after the
-                included time.
+                ₱25 for locker storage. After the included locker time ends, the
+                rider has a 1-minute grace period before the penalty amount is
+                added.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱25
@@ -295,8 +296,9 @@ export default function LockersPage() {
               <div className="font-semibold text-slate-100">Combined Mode</div>
               <div className="mt-2 text-sm text-slate-400">
                 ₱30 for storage and sanitation support. For demo, Combined Mode
-                includes 5 minutes of locker time. After that, a ₱15 penalty
-                applies per 3-minute block.
+                includes 5 minutes of locker time, followed by a 1-minute grace
+                period. After the grace period, a ₱15 penalty applies per
+                3-minute block.
               </div>
               <Badge className="mt-3" color="blue">
                 ₱30

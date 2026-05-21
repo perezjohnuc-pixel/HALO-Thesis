@@ -32,6 +32,8 @@ const LOCKER_INCLUDED_MINUTES = Number(
   process.env.LOCKER_INCLUDED_MINUTES || 600
 );
 
+const LOCKER_GRACE_MINUTES = Number(process.env.LOCKER_GRACE_MINUTES || 1);
+
 const LOCKER_EXTRA_BLOCK_MINUTES = Number(
   process.env.LOCKER_EXTRA_BLOCK_MINUTES || 60
 );
@@ -42,6 +44,10 @@ const LOCKER_EXTRA_FEE_PER_BLOCK = Number(
 
 const COMBINED_INCLUDED_MINUTES = Number(
   process.env.COMBINED_INCLUDED_MINUTES || 5
+);
+
+const COMBINED_GRACE_MINUTES = Number(
+  process.env.COMBINED_GRACE_MINUTES || 1
 );
 
 const COMBINED_EXTRA_BLOCK_MINUTES = Number(
@@ -147,6 +153,11 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
           ? COMBINED_INCLUDED_MINUTES
           : LOCKER_INCLUDED_MINUTES;
 
+      const graceMinutes =
+        serviceType === "combined"
+          ? COMBINED_GRACE_MINUTES
+          : LOCKER_GRACE_MINUTES;
+
       const extraBlockMinutes =
         serviceType === "combined"
           ? COMBINED_EXTRA_BLOCK_MINUTES
@@ -158,7 +169,8 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
           : LOCKER_EXTRA_FEE_PER_BLOCK;
 
       const includedUntilMs = startedMs + includedMinutes * 60 * 1000;
-      const overtimeMs = nowMs - includedUntilMs;
+      const penaltyStartsAtMs = includedUntilMs + graceMinutes * 60 * 1000;
+      const overtimeMs = nowMs - penaltyStartsAtMs;
 
       if (overtimeMs > 0) {
         const blockMs = extraBlockMinutes * 60 * 1000;
@@ -166,8 +178,8 @@ function calculateBookingAmountDue(booking: any, nowMs = Date.now()) {
         extraAmount = extraUnits * extraFeePerBlock;
         extraReason =
           serviceType === "combined"
-            ? "combined_overtime_penalty"
-            : "locker_overtime";
+            ? "combined_overtime_after_grace"
+            : "locker_overtime_after_grace";
       }
     }
   }

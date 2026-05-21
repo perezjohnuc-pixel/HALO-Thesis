@@ -12,6 +12,18 @@ import { Button, Card, CardBody, CardHeader, Badge } from "../../components/ui";
 import Countdown from "../../components/Countdown";
 import StatusPill from "../../components/StatusPill";
 
+const LOCKER_GRACE_MINUTES = Number(
+  import.meta.env.VITE_LOCKER_GRACE_MINUTES ?? 1
+);
+
+const LOCKER_EXTRA_BLOCK_MINUTES = Number(
+  import.meta.env.VITE_LOCKER_EXTRA_BLOCK_MINUTES ?? 1
+);
+
+const COMBINED_GRACE_MINUTES = Number(
+  import.meta.env.VITE_COMBINED_GRACE_MINUTES ?? 1
+);
+
 const COMBINED_EXTRA_BLOCK_MINUTES = Number(
   import.meta.env.VITE_COMBINED_EXTRA_BLOCK_MINUTES ?? 3
 );
@@ -108,7 +120,7 @@ export default function UserControlPanelPage() {
   const [busyComplete, setBusyComplete] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [penaltyTick, setPenaltyTick] = useState(0);
+  const [timeWindowTick, setTimeWindowTick] = useState(0);
 
   useEffect(() => {
     if (!bookingId) return;
@@ -180,29 +192,60 @@ export default function UserControlPanelPage() {
     booking?.helmetDetected === false &&
     booking?.status === "retrieval_verified";
 
-  const nowMs = Date.now() + penaltyTick * 0;
-  const combinedPenaltyBlockMs = COMBINED_EXTRA_BLOCK_MINUTES * 60 * 1000;
+  const nowMs = Date.now() + timeWindowTick * 0;
+
+  const isLockerBillingMode =
+    booking?.serviceType === "locker_only" ||
+    booking?.serviceType === "combined";
+
+  const paymentFinished =
+    paymentConfirmed === true ||
+    booking?.status === "completed" ||
+    booking?.status === "cancelled" ||
+    booking?.status === "expired";
+
+  const lockerGraceMinutes =
+    booking?.serviceType === "combined"
+      ? COMBINED_GRACE_MINUTES
+      : LOCKER_GRACE_MINUTES;
+
+  const lockerExtraBlockMinutes =
+    booking?.serviceType === "combined"
+      ? COMBINED_EXTRA_BLOCK_MINUTES
+      : LOCKER_EXTRA_BLOCK_MINUTES;
+
+  const lockerPenaltyBlockMs = lockerExtraBlockMinutes * 60 * 1000;
 
   const showLockerTimer =
-    (booking?.serviceType === "locker_only" ||
-      booking?.serviceType === "combined") &&
-    endAtMs !== null;
+    isLockerBillingMode && endAtMs !== null && !paymentFinished;
 
-  const combinedLockerTimeExpired =
-    booking?.serviceType === "combined" &&
-    endAtMs !== null &&
-    nowMs >= endAtMs &&
-    paymentConfirmed !== true &&
-    booking?.status !== "completed" &&
-    booking?.status !== "cancelled" &&
-    booking?.status !== "expired";
+  const includedTimeEnded =
+    showLockerTimer && endAtMs !== null && nowMs >= endAtMs;
 
-  const combinedPenaltyTargetMs =
-    combinedLockerTimeExpired && endAtMs !== null
-      ? endAtMs +
-        (Math.floor((nowMs - endAtMs) / combinedPenaltyBlockMs) + 1) *
-          combinedPenaltyBlockMs
+  const graceEndsAtMs =
+    includedTimeEnded && endAtMs !== null
+      ? endAtMs + lockerGraceMinutes * 60 * 1000
       : null;
+
+  const lockerInGracePeriod =
+    includedTimeEnded &&
+    graceEndsAtMs !== null &&
+    nowMs < graceEndsAtMs;
+
+  const lockerPenaltyActive =
+    includedTimeEnded &&
+    graceEndsAtMs !== null &&
+    nowMs >= graceEndsAtMs;
+
+  const lockerPenaltyTargetMs =
+    lockerPenaltyActive && graceEndsAtMs !== null
+      ? graceEndsAtMs +
+        (Math.floor((nowMs - graceEndsAtMs) / lockerPenaltyBlockMs) + 1) *
+          lockerPenaltyBlockMs
+      : null;
+
+  const billingModeLabel =
+    booking?.serviceType === "combined" ? "Combined Mode" : "Locker Mode";
 
   async function startProgram() {
     if (!bookingId || !booking) return;
@@ -361,42 +404,62 @@ export default function UserControlPanelPage() {
             </div>
           </div>
 
-          {showLockerTimer && !combinedLockerTimeExpired && (
+          {showLockerTimer && !includedTimeEnded && (
             <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
               <div className="text-sm text-blue-100">
-                {booking.serviceType === "combined"
-                  ? "Combined Mode locker time remaining"
-                  : "Locker time remaining"}
-              </div>
-
-              <div className="mt-2 text-3xl font-extrabold text-white">
-                <Countdown targetMs={endAtMs!} />
-              </div>
-
-              {booking.serviceType === "combined" && (
-                <div className="mt-2 text-xs text-blue-100/80">
-                  Combined Mode has 5 minutes of included locker time for demo.
-                </div>
-              )}
-            </div>
-          )}
-
-          {combinedLockerTimeExpired && combinedPenaltyTargetMs !== null && (
-            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
-              <div className="text-sm font-semibold text-red-100">
-                Combined Mode penalty countdown
-              </div>
-
-              <div className="mt-1 text-xs text-red-200/80">
-                The 5-minute included locker time has ended. A ₱15 penalty is
-                applied per 3-minute penalty block until payment and retrieval
-                are completed.
+                {billingModeLabel} time remaining
               </div>
 
               <div className="mt-2 text-3xl font-extrabold text-white">
                 <Countdown
-                  targetMs={combinedPenaltyTargetMs}
-                  onElapsed={() => setPenaltyTick((v) => v + 1)}
+                  targetMs={endAtMs!}
+                  onElapsed={() => setTimeWindowTick((v) => v + 1)}
+                />
+              </div>
+
+              <div className="mt-2 text-xs text-blue-100/80">
+                {booking.serviceType === "combined"
+                  ? "Combined Mode includes 5 minutes of locker time before the grace period."
+                  : "Locker Mode includes the allowed locker time before the grace period."}
+              </div>
+            </div>
+          )}
+
+          {lockerInGracePeriod && graceEndsAtMs !== null && (
+            <div className="mt-6 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+              <div className="text-sm font-semibold text-yellow-100">
+                {billingModeLabel} grace countdown
+              </div>
+
+              <div className="mt-1 text-xs text-yellow-200/80">
+                The included locker time has ended. You still have a 1-minute
+                grace period before the penalty amount is added.
+              </div>
+
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown
+                  targetMs={graceEndsAtMs}
+                  onElapsed={() => setTimeWindowTick((v) => v + 1)}
+                />
+              </div>
+            </div>
+          )}
+
+          {lockerPenaltyActive && lockerPenaltyTargetMs !== null && (
+            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+              <div className="text-sm font-semibold text-red-100">
+                {billingModeLabel} penalty countdown
+              </div>
+
+              <div className="mt-1 text-xs text-red-200/80">
+                The 1-minute grace period has ended. A penalty is now added per
+                penalty block until payment and retrieval are completed.
+              </div>
+
+              <div className="mt-2 text-3xl font-extrabold text-white">
+                <Countdown
+                  targetMs={lockerPenaltyTargetMs}
+                  onElapsed={() => setTimeWindowTick((v) => v + 1)}
                 />
               </div>
             </div>
