@@ -52,15 +52,19 @@ const MODE_OPTIONS: ModeOption[] = [
     id: "combined",
     title: "Combined Mode",
     amountDue: 30,
-    durationMin: 600,
+    durationMin: 5,
     selectedModes: ["locker", "mist", "fan", "uvc"],
     description:
-      "Secure storage plus sanitation support. Includes 10 hours of locker use.",
+      "Secure storage plus sanitation support. Includes 5 minutes of locker use for demo. After that, a ₱15 penalty applies per 3-minute block.",
   },
 ];
 
 const DISINFECT_FREE_PICKUP_MINUTES = Number(
   import.meta.env.VITE_DISINFECT_FREE_PICKUP_MINUTES ?? 30
+);
+
+const COMBINED_EXTRA_BLOCK_MINUTES = Number(
+  import.meta.env.VITE_COMBINED_EXTRA_BLOCK_MINUTES ?? 3
 );
 
 function getStepIndex(status?: string | null) {
@@ -176,6 +180,7 @@ export default function MyBookingPage() {
   const [busyMode, setBusyMode] = useState<ServiceType | null>(null);
   const [reservationElapsed, setReservationElapsed] = useState(false);
   const [pickupElapsed, setPickupElapsed] = useState(false);
+  const [combinedPenaltyTick, setCombinedPenaltyTick] = useState(0);
 
   useEffect(() => {
     if (!uid) return;
@@ -215,6 +220,7 @@ export default function MyBookingPage() {
   useEffect(() => {
     setReservationElapsed(false);
     setPickupElapsed(false);
+    setCombinedPenaltyTick(0);
   }, [
     booking?.id,
     (booking as any)?.reservationExpiresAt,
@@ -223,6 +229,7 @@ export default function MyBookingPage() {
     (booking as any)?.programFinishedAt,
     (booking as any)?.billingUpdatedAt,
     (booking as any)?.updatedAt,
+    (booking as any)?.endAt,
     booking?.status,
   ]);
 
@@ -407,6 +414,25 @@ export default function MyBookingPage() {
     showDisinfectPickupTimer &&
     unattendedChargeStartsAtMs !== null &&
     (Date.now() >= unattendedChargeStartsAtMs || pickupElapsed);
+
+  const endAtMs = toMs((booking as any).endAt);
+  const nowMs = Date.now() + combinedPenaltyTick * 0;
+  const combinedPenaltyBlockMs = COMBINED_EXTRA_BLOCK_MINUTES * 60 * 1000;
+
+  const combinedLockerTimeExpired =
+    booking.serviceType === "combined" &&
+    booking.status === "awaiting_payment" &&
+    endAtMs !== null &&
+    nowMs >= endAtMs &&
+    booking.paymentStatus !== "paid" &&
+    booking.paymentConfirmed !== true;
+
+  const combinedPenaltyTargetMs =
+    combinedLockerTimeExpired && endAtMs !== null
+      ? endAtMs +
+        (Math.floor((nowMs - endAtMs) / combinedPenaltyBlockMs) + 1) *
+          combinedPenaltyBlockMs
+      : null;
 
   return (
     <div className="space-y-4">
@@ -685,6 +711,31 @@ export default function MyBookingPage() {
                       to show the latest amount due.
                     </div>
                   )}
+                </div>
+              )}
+
+              {combinedLockerTimeExpired && combinedPenaltyTargetMs !== null && (
+                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-red-100">
+                        Combined Mode penalty countdown
+                      </div>
+
+                      <div className="text-xs text-red-200/80">
+                        The 5-minute included locker time has ended. A ₱15
+                        additional charge is applied per 3-minute penalty block
+                        until payment and retrieval are completed.
+                      </div>
+                    </div>
+
+                    <div className="text-2xl font-extrabold text-white">
+                      <Countdown
+                        targetMs={combinedPenaltyTargetMs}
+                        onElapsed={() => setCombinedPenaltyTick((v) => v + 1)}
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 
